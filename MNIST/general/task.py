@@ -20,96 +20,51 @@ from layers.components import EncoderBlock, DecoderBlock
 class PartProtoVAE(LightningModule):
     def __init__(
         self,
-        input_height,
-        enc_type = "resnet18",
-        first_conv = False,
-        maxpool1 = False,
-        enc_out_dim = 512,
+        input_height=28,
+        input_channels = 1,
+        enc_out_channels = 32,
         kl_coeff = 0.1,
-        latent_dim = 256,
+        latent_channels = 16,
         lr = 1e-4,
-        **kwargs,
+        ksize = 3
     ):
-        """
-        Args:
-            input_height: height of the images
-            enc_type: option between resnet18 or resnet50
-            first_conv: use standard kernel_size 7, stride 2 at start or
-                replace it with kernel_size 3, stride 1 conv
-            maxpool1: use standard maxpool to reduce spatial dim of feat by a factor of 2
-            enc_out_dim: set according to the out_channel count of
-                encoder used (512 for resnet18, 2048 for resnet50)
-            kl_coeff: coefficient for kl term of the loss
-            latent_dim: dim of latent space
-            lr: learning rate for Adam
-        """
 
         super().__init__()
 
-        # saving hparams to model state dict
-        self.save_hyperparameters()
-
-        # debugging
-        self.example_input_array = torch.Tensor(1, 3, input_height, input_height)
-
         self.lr = lr
         self.kl_coeff = kl_coeff
-        self.enc_out_dim = enc_out_dim
-        self.latent_dim = latent_dim
+        self.ksize = ksize
+        self.enc_out_channels = enc_out_channels
+        self.latent_channels = latent_channels
         self.input_height = input_height
+        self.input_channels = input_channels
 
-        valid_encoders = {
-            "resnet18": {
-                "enc": resnet18_encoder,
-                "dec": resnet18_decoder,
-            },
-            "resnet50": {
-                "enc": resnet50_encoder,
-                "dec": resnet50_decoder,
-            },
-        }
+        self.encoder = EncoderBlock(self.input_channels, self.latent_channels, self.ksize)
+        self.decoder = DecoderBlock(self.latent_channels, self.input_channels, self.ksize)
 
-        if enc_type not in valid_encoders:
-            self.encoder = resnet18_encoder(first_conv, maxpool1)
-            self.decoder = resnet18_decoder(self.latent_dim, self.input_height, first_conv, maxpool1)
-        else:
-            self.encoder = valid_encoders[enc_type]["enc"](first_conv, maxpool1)
-            self.decoder = valid_encoders[enc_type]["dec"](self.latent_dim, self.input_height, first_conv, maxpool1)
+        # lists to store loses from each step
+        self.training_step_losses = []
+        self.validation_step_losses = []
+        self.test_step_losses = []
 
-        self.fc_mu = nn.Linear(self.enc_out_dim, self.latent_dim)
-        self.fc_var = nn.Linear(self.enc_out_dim, self.latent_dim)
-
-        self.time = datetime.now()
+        # lists to store reconstruction images
         self.val_outs = []
         self.test_outs = []
 
-
-    @staticmethod
-    def pretrained_weights_available():
-        return list(VAE.pretrained_urls.keys())
-
-
-    def from_pretrained(self, checkpoint_name):
-        if checkpoint_name not in VAE.pretrained_urls:
-            raise KeyError(str(checkpoint_name) + " not present in pretrained weights.")
-        return self.load_from_checkpoint(VAE.pretrained_urls[checkpoint_name], strict=False)
-
+        # dict to store epoch loss
+        self.train_history = {'train_rec_loss': [],  'train_kl_loss':[], 'train_total_loss':[], 'train_acc': []}
+        self.val_history = {'val_rec_loss': [], 'val_kl_loss': [], 'val_total_loss':[], 'val_acc': []}
+        self.test_history = {'test_rec_loss': [], 'test_kl_loss': [], 'test_total_loss':[], 'test_acc': []}
 
     def forward(self, x):
-        x = self.encoder(x)
-        mu = self.fc_mu(x)
-        log_var = self.fc_var(x)
-        p, q, z = self.sample(mu, log_var)
+        mu, logvar = self.encoder(x)
+        p, q, z = self.sample(mu, logvar)
         return self.decoder(z)
 
-
     def _run_step(self, x):
-        x = self.encoder(x)
-        mu = self.fc_mu(x)
-        log_var = self.fc_var(x)
-        p, q, z = self.sample(mu, log_var)
+        mu, logvar = self.encoder(x)
+        p, q, z = self.sample(mu, logvar)
         return z, self.decoder(z), p, q
-
 
     def sample(self, mu, log_var):
         std = torch.exp(log_var / 2)
@@ -117,7 +72,6 @@ class PartProtoVAE(LightningModule):
         q = torch.distributions.Normal(mu, std)
         z = q.rsample()
         return p, q, z
-
 
     def step(self, batch, batch_idx):
         x, y = batch
@@ -135,25 +89,12 @@ class PartProtoVAE(LightningModule):
             "kl": kl,
             "loss": loss,
         }
-        return loss, logs
+        return loss, logs, x_hat
     
 
     def training_step(self, batch, batch_idx):
-        """
-        #############################################################################
-        ################################ PLACEHOLDER ################################
-        #############################################################################
 
-        This function should return the training loss of the batch.
-        Here is what you have to implement (~ 3 lines of code):
-            - read loss and logs by running self.step() on batch and batch_idx.
-            - logging the training logs using self.log_dict() function. 
-                logs is a dictionary. In order not to be mixed with logs from other steps, you have to add the string "train_"
-                before all the keys in this dictionary. Make sure to call self.log_dict() with on_step=True, on_epoch=False, and
-                sync_dist=True
-            - return loss
-        """
-        loss, logs = self.step(batch, batch_idx)
+        loss, logs , _ = self.step(batch, batch_idx)
 
         # modify train logs
         tr_logs = dict()
@@ -161,123 +102,85 @@ class PartProtoVAE(LightningModule):
             new_key = "train_"+str(key)
             tr_logs[new_key] = val
 
-        self.log_dict(tr_logs, on_step=True, on_epoch=False, sync_dist=True)
+        self.training_step_losses.append(tuple(tr_logs.values()))
         return loss
 
     def validation_step(self, batch, batch_idx):
-        """
-        #############################################################################
-        ################################ PLACEHOLDER ################################
-        #############################################################################
 
-        This function should return the validation loss of the batch.
-        Here is what you have to implement (~ 5 lines of code):
-            - read loss and validation logs by running self.step() on batch and batch_idx.
-            - logging the logs using self.log_dict() function. 
-                logs is a dictionary. In order not to be mixed with logs from other steps, you have to add the string "val_"
-                before all the keys in this dictionary. Make sure to call self.log_dict() with sync_dist=True
-            - make sure for the 0th batch (batch_idx == 0), self.val_outs is set to batch
-            - return loss
-        """
-        loss, logs = self.step(batch, batch_idx)
+        loss, logs, x_hat = self.step(batch, batch_idx)
 
         val_logs = dict()
         for key, val in logs.items():
             new_key = "val_"+str(key)
             val_logs[new_key] = val
-        self.log_dict(val_logs, on_step=True, on_epoch=False, sync_dist=True)
 
-        if batch_idx == 0:
-            self.val_outs = batch
+        # store loss as well as reconstructed images
+        self.validation_step_losses.append(tuple(val_logs.values()))
         return loss
 
     def test_step(self, batch, batch_idx):
-        """
-        #############################################################################
-        ################################ PLACEHOLDER ################################
-        #############################################################################
 
-        This function should return the test loss of the batch.
-        Here is what you have to implement (~ 5 lines of code):
-            - read loss and logs by running self.step() on batch and batch_idx.
-            - logging the test logs using self.log_dict() function. 
-                logs is a dictionary. In order not to be mixed with logs from other steps, you have to add the string "test_"
-                before all the keys in this dictionary. Make sure to call self.log_dict() with on_step=True, on_epoch=False, and
-                sync_dist=True
-            - make sure for the 0th batch (batch_idx == 0), self.test_outs is set to batch
-            - return loss
-        """
         loss, logs = self.step(batch, batch_idx)
 
         test_logs = dict()
         for key, val in logs.items():
             new_key = "test_" + str(key)
             test_logs[new_key] = val
-        self.log_dict(test_logs, on_step=True, on_epoch=False, sync_dist=True)
-
-        if batch_idx == 0:
-            self.test_outs = batch
+        self.test_step_losses.append(tuple(test_logs.values()))
         return loss
+
+    def get_cumulative_losses(self, losses_list):
+        num_items = len(losses_list)
+        cum_rec_loss = 0
+        cum_kl_loss = 0
+        cum_total_loss = 0
+
+        for rec_loss, kl_loss, total_loss in losses_list:
+            cum_rec_loss += rec_loss.item()
+            cum_kl_loss += kl_loss.item()
+            cum_total_loss += total_loss.item()
+
+        # get average loss
+        cum_rec_loss += cum_rec_loss / num_items
+        cum_kl_loss += cum_kl_loss / num_items
+        cum_total_loss += cum_total_loss / num_items
+
+        return cum_rec_loss, cum_kl_loss, cum_total_loss
 
 
     def on_train_epoch_end(self):
-            now = datetime.now()
-            delta = now - self.time
-            self.time = now
-            tensorboard_logs = {'time_secs_epoch': delta.seconds}
-            self.log_dict(tensorboard_logs, sync_dist=True)
-    
+
+        cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.training_step_losses)
+        print(f'\nTraining Epoch({self.current_epoch}): rec_loss: {cum_rec_loss}, kl_loss:{cum_kl_loss}, total_loss:{cum_total_loss}')
+
+        # store epoch loss
+        self.train_history['train_rec_loss'].append(cum_rec_loss)
+        self.train_history['train_kl_loss'].append(cum_kl_loss)
+        self.train_history['train_total_loss'].append(cum_total_loss)
+        self.training_step_losses.clear()
+        
 
     def on_validation_epoch_end(self):
-        if self.global_rank == 0:
-            val_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "validation_results")
-            create_dir(val_dir)
+        cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.validation_step_losses)
+        print(f'\nValidation Epoch({self.current_epoch}): rec_loss: {cum_rec_loss}, kl_loss:{cum_kl_loss}, total_loss:{cum_total_loss}')
 
-            # Saving validation results.
-            x, y = self.val_outs
-            z, x_hat, p, q = self._run_step(x)
-
-            # Loading inv_transformations
-            self.inv_transformations_read_dir = self.logger.save_dir
-            self.inv_transformations = load_transformation(join(self.inv_transformations_read_dir, "inv_trans.obj"))
-            if self.inv_transformations is not None:
-                x = self.inv_transformations(x)
-                x_hat = self.inv_transformations(x_hat)
-
-            if self.current_epoch == 0:
-                grid = vutils.make_grid(x, nrow=8, normalize=False)
-                vutils.save_image(x, join(val_dir, f"orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-                self.logger.experiment.add_image(f"orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
-
-            grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
-            vutils.save_image(x_hat, join(val_dir, f"recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-            self.logger.experiment.add_image(f"recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        # store epoch loss
+        self.val_history['val_rec_loss'].append(cum_rec_loss)
+        self.val_history['val_kl_loss'].append(cum_kl_loss)
+        self.val_history['val_total_loss'].append(cum_total_loss)
+        self.validation_step_losses.clear()
+        self.log("val_loss", cum_total_loss)
 
 
     def on_test_epoch_end(self):
-        if self.global_rank == 0:
-            test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
-            create_dir(test_dir)
+        cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.test_step_losses)
+        print(f'\nTest Epoch({self.current_epoch}): rec_loss: {cum_rec_loss}, kl_loss:{cum_kl_loss}, total_loss:{cum_total_loss}')
 
-            # Saving test results.
-            x, y = self.test_outs
-            z, x_hat, p, q = self._run_step(x)
-
-
-            # Loading inv_transformations
-            self.inv_transformations_read_dir = self.logger.save_dir
-            self.inv_transformations = load_transformation(join(self.inv_transformations_read_dir, "inv_trans.obj"))
-            if self.inv_transformations is not None:
-                x = self.inv_transformations(x)
-                x_hat = self.inv_transformations(x_hat)
-
-            grid = vutils.make_grid(x, nrow=8, normalize=False)
-            vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-            self.logger.experiment.add_image(f"test_orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
-
-            grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
-            vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-            self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        # store epoch loss
+        self.val_history['val_rec_loss'].append(cum_rec_loss)
+        self.val_history['val_kl_loss'].append(cum_kl_loss)
+        self.val_history['val_total_loss'].append(cum_total_loss)
+        self.test_step_losses.clear()
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
