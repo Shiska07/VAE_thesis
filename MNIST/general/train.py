@@ -2,9 +2,8 @@ import os
 from argparse import ArgumentParser
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-
-from general.task import VAE
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from general.task import PartProtoVAE
 from general.datamodule import MNISTDataModule
 from utils.os_tools import create_dir, load_parameters
 
@@ -21,19 +20,34 @@ def main_func(params_dir_path):
                                           params['val_ratio'], params['num_dl_workers'])
 
             # Iniatiating the model
-            model = VAE()
+            model = PartProtoVAE()
 
-            # Creating Logging Directory
-            create_dir(args.logging_dir)
+            # Creating Logging Directory, callbacks and checkpoint
+            create_dir(params['logging_dir'])
 
-            tb_logger = TensorBoardLogger(args.logging_dir, name=args.logging_name, log_graph=True)
+            early_stopping_callback = EarlyStopping(
+                monitor='val_loss', min_delta=0.01,
+                patience=5,
+                verbose=True,
+                mode='min'
+            )
+
+            checkpoint_callback = ModelCheckpoint(
+                monitor='val_loss',
+                dirpath=params['ckpt_path'],  # Directory to save checkpoints
+                filename=f'best_model',  # Prefix for the checkpoint filenames
+                save_top_k=1,  # Save the best model only
+                mode='min',
+                every_n_epochs=1
+            )
+
+            # initialize trainer
+            tb_logger = TensorBoardLogger(params['logging_dir'], name=params['logging_name'], log_graph=True)
             trainer = pl.Trainer(
-                accelerator = args.accelerator,
-                devices = args.devices,
-                max_epochs = args.max_epochs,
-                strategy = args.strategy,
-                logger = tb_logger,
-                gradient_clip_val=0.5,
+                accelerator = params['accelerator'],
+                max_epochs = params['max_epochs'],
+                strategy = params['strategy'],
+                logger = tb_logger
             )
 
             trainer.fit(model, data_module)
