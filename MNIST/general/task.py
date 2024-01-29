@@ -158,7 +158,7 @@ class PartProtoVAE(LightningModule):
         self.train_history['train_kl_loss'].append(cum_kl_loss)
         self.train_history['train_total_loss'].append(cum_total_loss)
         self.training_step_losses.clear()
-        
+
 
     def on_validation_epoch_end(self):
         cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.validation_step_losses)
@@ -171,6 +171,24 @@ class PartProtoVAE(LightningModule):
         self.validation_step_losses.clear()
         self.log("val_loss", cum_total_loss)
 
+        if self.global_rank == 0:
+            val_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "validation_results")
+            create_dir(val_dir)
+
+            # Saving validation results.
+            x, y = self.val_outs
+            z, x_hat, p, q = self._run_step(x)
+
+            if self.current_epoch == 0:
+                grid = vutils.make_grid(x, nrow=8, normalize=False)
+                vutils.save_image(x, join(val_dir, f"orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+                self.logger.experiment.add_image(f"orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+
+            grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
+            vutils.save_image(x_hat, join(val_dir, f"recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+            self.logger.experiment.add_image(f"recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+
+
 
     def on_test_epoch_end(self):
         cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.test_step_losses)
@@ -181,6 +199,22 @@ class PartProtoVAE(LightningModule):
         self.val_history['val_kl_loss'].append(cum_kl_loss)
         self.val_history['val_total_loss'].append(cum_total_loss)
         self.test_step_losses.clear()
+
+        if self.global_rank == 0:
+            test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
+            create_dir(test_dir)
+
+            # Saving test results.
+            x, y = self.test_outs
+            z, x_hat, p, q = self._run_step(x)
+
+            grid = vutils.make_grid(x, nrow=8, normalize=False)
+            vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+            self.logger.experiment.add_image(f"test_orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+
+            grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
+            vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+            self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
