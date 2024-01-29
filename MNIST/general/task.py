@@ -1,31 +1,27 @@
 # VAE implementation from pytorch_lightning bolts is used in this source code:
 # https://github.com/Lightning-Universe/lightning-bolts/tree/master/pl_bolts/models/autoencoders
 
-import argparse
 from os.path import join
-from urllib import parse
-from datetime import datetime
-from argparse import ArgumentParser
 
 import torch
-from torch import nn
-from torch.nn import functional as F
-from pytorch_lightning import LightningModule
-from pytorch_lightning.loggers import TensorBoardLogger
+import torchsummary
 import torchvision.utils as vutils
+from pytorch_lightning import LightningModule
+from torch.nn import functional as F
+from utils import create_dir
 
-from utils.os_tools import create_dir, load_transformation, save_latent_space
-from layers.components import EncoderBlock, DecoderBlock
+from components import EncoderBlock, DecoderBlock
+
 
 class PartProtoVAE(LightningModule):
     def __init__(
         self,
         input_height=28,
         input_channels = 1,
-        enc_out_channels = 32,
         kl_coeff = 0.1,
         latent_channels = 16,
         lr = 1e-4,
+        enc_out_channels = 32,
         ksize = 3
     ):
 
@@ -41,8 +37,11 @@ class PartProtoVAE(LightningModule):
 
         self.encoder = EncoderBlock(self.input_channels, self.latent_channels, self.ksize)
         self.decoder = DecoderBlock(self.latent_channels, self.input_channels, self.ksize)
+        print(f"Excoder arc: {torchsummary.summary(self.decoder, (16, 5, 5))}")
+        # print(f"Decoder arc: {torchsummary.summary(self.decoder, 5)}")
 
         # lists to store loses from each step
+        # losses sores as tuple (rec_loss, kl_loss, total_loss)
         self.training_step_losses = []
         self.validation_step_losses = []
         self.test_step_losses = []
@@ -218,3 +217,6 @@ class PartProtoVAE(LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
+
+    def get_history(self):
+        return self.train_history, self.val_history, self.test_history
