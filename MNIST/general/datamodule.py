@@ -16,7 +16,9 @@ class MNISTDataModule(pl.LightningDataModule):
         self.val_size = val_size
         self.random_seed = random_seed
         self.num_workers = num_workers
-        self.transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+        self.transform = transforms.Compose([transforms.ToTensor(),
+                                             transforms.Normalize((0.1307,), (0.3081,))
+                                             ])
 
     def prepare_data(self):
         # download
@@ -52,13 +54,13 @@ class MNISTDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, sampler=self.train_sampler,
-                                               num_workers=self.num_workers, pin_memory=True)
+                                               num_workers=self.num_workers, pin_memory=False)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.batch_size, sampler=self.val_sampler,
-                                             num_workers=self.num_workers, pin_memory=True)
+                                             num_workers=self.num_workers, persistent_workers=True, pin_memory=False)
 
     def test_dataloader(self):
         return DataLoader(self.mnist_test, batch_size=self.batch_size, shuffle=True,
-                                              num_workers=self.num_workers, pin_memory=True)
+                                              num_workers=self.num_workers, pin_memory=False)
 

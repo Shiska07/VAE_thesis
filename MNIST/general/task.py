@@ -9,7 +9,6 @@ import torchvision.utils as vutils
 from pytorch_lightning import LightningModule
 from torch.nn import functional as F
 from utils import create_dir
-
 from components import EncoderBlock, DecoderBlock
 
 
@@ -27,6 +26,9 @@ class PartProtoVAE(LightningModule):
 
         super().__init__()
 
+        # saving hparams to model state dict
+        # self.save_hyperparameters()
+
         self.lr = lr
         self.kl_coeff = kl_coeff
         self.ksize = ksize
@@ -37,8 +39,6 @@ class PartProtoVAE(LightningModule):
 
         self.encoder = EncoderBlock(self.input_channels, self.latent_channels, self.ksize)
         self.decoder = DecoderBlock(self.latent_channels, self.input_channels, self.ksize)
-        print(f"Excoder arc: {torchsummary.summary(self.decoder, (16, 5, 5))}")
-        # print(f"Decoder arc: {torchsummary.summary(self.decoder, 5)}")
 
         # lists to store loses from each step
         # losses sores as tuple (rec_loss, kl_loss, total_loss)
@@ -54,6 +54,7 @@ class PartProtoVAE(LightningModule):
         self.train_history = {'train_rec_loss': [],  'train_kl_loss':[], 'train_total_loss':[], 'train_acc': []}
         self.val_history = {'val_rec_loss': [], 'val_kl_loss': [], 'val_total_loss':[], 'val_acc': []}
         self.test_history = {'test_rec_loss': [], 'test_kl_loss': [], 'test_total_loss':[], 'test_acc': []}
+
 
     def forward(self, x):
         mu, logvar = self.encoder(x)
@@ -75,7 +76,7 @@ class PartProtoVAE(LightningModule):
     def step(self, batch, batch_idx):
         x, y = batch
         z, x_hat, p, q = self._run_step(x)
-        recon_loss = F.mse_loss(x_hat, x, reduction="mean")
+        recon_loss = F.binary_cross_entropy(x_hat, x, reduction="mean")
 
         kl = torch.distributions.kl_divergence(q, p)
         kl = kl.mean()
@@ -101,6 +102,7 @@ class PartProtoVAE(LightningModule):
             new_key = "train_"+str(key)
             tr_logs[new_key] = val
 
+        self.log_dict(tr_logs, on_epoch=True, on_step=False)
         self.training_step_losses.append(tuple(tr_logs.values()))
         return loss
 
@@ -113,6 +115,7 @@ class PartProtoVAE(LightningModule):
             new_key = "val_"+str(key)
             val_logs[new_key] = val
 
+        self.log_dict(val_logs, on_epoch=True, on_step=False)
         # store loss as well as reconstructed images
         self.validation_step_losses.append(tuple(val_logs.values()))
         return loss
@@ -125,6 +128,8 @@ class PartProtoVAE(LightningModule):
         for key, val in logs.items():
             new_key = "test_" + str(key)
             test_logs[new_key] = val
+
+        self.log_dict(test_logs, on_epoch=True, on_step=False)
         self.test_step_losses.append(tuple(test_logs.values()))
         return loss
 
@@ -199,21 +204,21 @@ class PartProtoVAE(LightningModule):
         self.val_history['val_total_loss'].append(cum_total_loss)
         self.test_step_losses.clear()
 
-        if self.global_rank == 0:
-            test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
-            create_dir(test_dir)
-
-            # Saving test results.
-            x, y = self.test_outs
-            z, x_hat, p, q = self._run_step(x)
-
-            grid = vutils.make_grid(x, nrow=8, normalize=False)
-            vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-            self.logger.experiment.add_image(f"test_orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
-
-            grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
-            vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-            self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        # if self.global_rank == 0:
+        #     test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
+        #     create_dir(test_dir)
+        #
+        #     # Saving test results.
+        #     x, y = self.test_outs
+        #     z, x_hat, p, q = self._run_step(x)
+        #
+        #     grid = vutils.make_grid(x, nrow=8, normalize=False)
+        #     vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+        #     self.logger.experiment.add_image(f"test_orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        #
+        #     grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
+        #     vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+        #     self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)

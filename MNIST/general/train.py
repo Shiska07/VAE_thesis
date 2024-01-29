@@ -30,9 +30,8 @@ def main_func(params_dir_path):
 
 
             # Creating Logging Directory, callbacks and checkpoint
-            create_dir(params['logging_dir']+params['logging_name'])
             create_dir(params['plots_dir'])
-            create_dir(params['ckpt_dir'])
+            create_dir(params['ckpt_path'])
 
             early_stopping_callback = EarlyStopping(
                 monitor='val_loss', min_delta=0.01,
@@ -67,12 +66,13 @@ def main_func(params_dir_path):
 
 
 if __name__ == '__main__':
-    parser = ArgumentParser(description="Load JSON files from a directory")
-    parser.add_argument("folder_name", help="Name of the folder containing JSON files")
-    args = parser.parse_args()
-    folder_name = args.folder_name
+    # parser = ArgumentParser(description="Load JSON files from a directory")
+    # parser.add_argument("folder_name", help="Name of the folder containing JSON files")
+    # args = parser.parse_args()
+    # folder_name = args.folder_name
 
-    directory_path = os.path.abspath(folder_name)
+    # directory_path = os.path.abspath(folder_name)
+    directory_path = "C:\\Users\\shisk\\Desktop\\Projects\\VAE_thesis\\MNIST\\params"
 
     # Calling the main function
     main_func(directory_path)
