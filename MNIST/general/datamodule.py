@@ -16,8 +16,7 @@ class MNISTDataModule(pl.LightningDataModule):
         self.val_size = val_size
         self.random_seed = random_seed
         self.num_workers = num_workers
-        self.transform = transforms.Compose([transforms.ToTensor(),
-                                             transforms.Normalize((0.1307,), (0.3081,))
+        self.transform = transforms.Compose([transforms.ToTensor()
                                              ])
 
     def prepare_data(self):
@@ -30,9 +29,9 @@ class MNISTDataModule(pl.LightningDataModule):
         if stage == "fit":
             # load the dataset
             self.train_dataset = MNIST(root=self.data_dir, train=True,
-                                            transform=transforms.ToTensor())
+                                            transform=self.transform)
             self.val_dataset = MNIST(root=self.data_dir, train=True,
-                                         transform=transforms.ToTensor())
+                                         transform=self.transform)
 
             num_train = len(self.train_dataset)
             indices = list(range(num_train))
@@ -54,13 +53,13 @@ class MNISTDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, sampler=self.train_sampler,
-                                               num_workers=self.num_workers, pin_memory=False)
+                                               num_workers=self.num_workers, persistent_workers=True, pin_memory=False)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.batch_size, sampler=self.val_sampler,
                                              num_workers=self.num_workers, persistent_workers=True, pin_memory=False)
 
     def test_dataloader(self):
-        return DataLoader(self.mnist_test, batch_size=self.batch_size, shuffle=True,
-                                              num_workers=self.num_workers, pin_memory=False)
+        return DataLoader(self.mnist_test, batch_size=self.batch_size, shuffle=False,
+                                              num_workers=self.num_workers, persistent_workers=True, pin_memory=False)
 

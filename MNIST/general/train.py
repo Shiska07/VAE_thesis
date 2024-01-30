@@ -5,7 +5,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from task import PartProtoVAE
 from datamodule import MNISTDataModule
-from utils import load_parameters, create_dir
+from utils import load_parameters, create_dir, save_plots
 
 def main_func(params_dir_path):
     for filename in os.listdir(directory_path):
@@ -31,7 +31,9 @@ def main_func(params_dir_path):
 
             # Creating Logging Directory, callbacks and checkpoint
             create_dir(params['plots_dir'])
-            create_dir(params['ckpt_path'])
+
+            best_model_ckpt = os.path.join(params['ckpt_path'], params['logging_name'])
+            create_dir(best_model_ckpt)
 
             early_stopping_callback = EarlyStopping(
                 monitor='val_loss', min_delta=0.01,
@@ -42,7 +44,7 @@ def main_func(params_dir_path):
 
             checkpoint_callback = ModelCheckpoint(
                 monitor='val_loss',
-                dirpath=params['ckpt_path'],  # Directory to save checkpoints
+                dirpath=best_model_ckpt,  # Directory to save checkpoints
                 filename=f'best_model',  # Prefix for the checkpoint filenames
                 save_top_k=1,  # Save the best model only
                 mode='min',
@@ -61,7 +63,21 @@ def main_func(params_dir_path):
             )
 
             trainer.fit(model, data_module)
-            # trainer.test(model, data_module)
+            trainer.test(model, data_module)
+
+            # save test loss
+            model.save_test_loss_data(best_model_ckpt)
+
+            # save plots
+            train_epoch_hist, val_epoch_hist = model.get_history()
+            hist_path = os.path.join(params['logging_dir'], params['logging_name'], 'plots')
+            create_dir(hist_path)
+            save_plots(train_epoch_hist, val_epoch_hist, hist_path)
+
+            # save model
+            model_dest = os.path.join(params['ckpt_path'], params['logging_name'], 'complete_model')
+            create_dir(model_dest)
+            model.save_entire_model(model_dest)
     
 
 

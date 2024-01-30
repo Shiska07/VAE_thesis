@@ -1,6 +1,7 @@
 # VAE implementation from pytorch_lightning bolts is used in this source code:
 # https://github.com/Lightning-Universe/lightning-bolts/tree/master/pl_bolts/models/autoencoders
-
+import json
+import os
 from os.path import join
 
 import torch
@@ -27,7 +28,7 @@ class PartProtoVAE(LightningModule):
         super().__init__()
 
         # saving hparams to model state dict
-        # self.save_hyperparameters()
+        self.save_hyperparameters()
 
         self.lr = lr
         self.kl_coeff = kl_coeff
@@ -118,11 +119,15 @@ class PartProtoVAE(LightningModule):
         self.log_dict(val_logs, on_epoch=True, on_step=False)
         # store loss as well as reconstructed images
         self.validation_step_losses.append(tuple(val_logs.values()))
+
+        if batch_idx == 0:
+            self.val_outs = batch
+
         return loss
 
     def test_step(self, batch, batch_idx):
 
-        loss, logs = self.step(batch, batch_idx)
+        loss, logs, x_hat = self.step(batch, batch_idx)
 
         test_logs = dict()
         for key, val in logs.items():
@@ -131,6 +136,10 @@ class PartProtoVAE(LightningModule):
 
         self.log_dict(test_logs, on_epoch=True, on_step=False)
         self.test_step_losses.append(tuple(test_logs.values()))
+
+        if batch_idx == 0:
+            self.test_outs = batch
+
         return loss
 
     def get_cumulative_losses(self, losses_list):
@@ -199,29 +208,42 @@ class PartProtoVAE(LightningModule):
         print(f'\nTest Epoch({self.current_epoch}): rec_loss: {cum_rec_loss}, kl_loss:{cum_kl_loss}, total_loss:{cum_total_loss}')
 
         # store epoch loss
-        self.val_history['val_rec_loss'].append(cum_rec_loss)
-        self.val_history['val_kl_loss'].append(cum_kl_loss)
-        self.val_history['val_total_loss'].append(cum_total_loss)
+        self.test_history['val_rec_loss'].append(cum_rec_loss)
+        self.test_history['val_kl_loss'].append(cum_kl_loss)
+        self.test_history['val_total_loss'].append(cum_total_loss)
         self.test_step_losses.clear()
 
-        # if self.global_rank == 0:
-        #     test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
-        #     create_dir(test_dir)
-        #
-        #     # Saving test results.
-        #     x, y = self.test_outs
-        #     z, x_hat, p, q = self._run_step(x)
-        #
-        #     grid = vutils.make_grid(x, nrow=8, normalize=False)
-        #     vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-        #     self.logger.experiment.add_image(f"test_orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
-        #
-        #     grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
-        #     vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-        #     self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        if self.global_rank == 0:
+            test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
+            create_dir(test_dir)
+
+            # Saving test results.
+            x, y = self.test_outs
+            z, x_hat, p, q = self._run_step(x)
+
+            grid = vutils.make_grid(x, nrow=8, normalize=False)
+            vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+            self.logger.experiment.add_image(f"test_orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+
+            grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
+            vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+            self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def get_history(self):
-        return self.train_history, self.val_history, self.test_history
+        return self.train_history, self.val_history
+
+    def save_test_loss_data(self, path):
+        save_path = os.path.join(path, 'test_loss.json')
+        with open(save_path, 'w') as json_file:
+            json.dump(self.test_history, json_file)
+
+    def save_entire_model(self, model_dest):
+        # save the entire model
+        model_architecture_path = os.path.join(model_dest, 'arc.pth')
+        model_weights_path = os.path.join(model_dest, 'weights.pth')
+        torch.save(self.model, model_architecture_path)
+        torch.save(self.model.state_dict(), model_weights_path)
+        print(f'Model saved at {model_dest}')
