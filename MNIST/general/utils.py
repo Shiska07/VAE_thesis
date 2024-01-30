@@ -51,43 +51,50 @@ def save_history(history, history_dir, model_name, params_fname, batch_size, tra
     return history_file_path
 
 
-def save_plots(history, plots_dir, model_name, params_fname, batch_size, training_type):
-    train_loss = history['train_loss']
-    val_loss = history['val_loss']
-    train_acc = history['train_acc']
-    val_acc = history['val_acc']
-    
-    plots_file_path = os.path.join(plots_dir,
-        str(model_name), str(params_fname), str(batch_size), str(training_type))
-    # create directory if non-existent
-    try:
-        os.makedirs(plots_file_path, exist_ok=True)
-    except OSError as e:
-        print(f"Error creating directory {plots_file_path}: {e}")
+def save_plots(train_epoch_hist, val_epoch_hist, plots_file_path):
 
-    plt.figure(figsize=(16, 6))
-    plt.subplot(1, 2, 1)
+    train_rec_loss = train_epoch_hist['train_rec_loss']
+    train_kl_loss = train_epoch_hist['train_kl_loss']
+    train_total_loss = train_epoch_hist['train_total_loss']
+
+    # pop(0) as the first value is from sanity check
+    val_rec_loss = val_epoch_hist['val_rec_loss'].pop(0)
+    val_kl_loss = val_epoch_hist['val_kl_loss'].pop(0)
+    val_total_loss = val_epoch_hist['val_total_loss'].pop(0)
+
+
+    plt.figure(figsize=(24, 6))
+    plt.subplot(1, 3, 1)
     # create train_loss vs. val_loss
-    plt.plot(train_loss, label='Train Loss', color='blue')
-    plt.plot(val_loss, label='Validation Loss', color='red')
-    plt.title(f'Training Vs Validation Loss {training_type}')
+    plt.plot(train_rec_loss, label='Train Loss', color='blue')
+    plt.plot(val_rec_loss, label='Validation Loss', color='red')
+    plt.title(f'Training Vs Validation Reconstruction Loss')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.legend()
     plt.grid()
 
-    # create train_acc vs. val_acc
-    plt.subplot(1, 2, 2)
-    plt.plot(train_acc, label='Train Accuracy', color='blue')
-    plt.plot(val_acc, label='Validation Accuracy', color='red')
-    plt.title(f'Training Vs Validation Accuracy {training_type}')
+    plt.subplot(1, 3, 2)
+    plt.plot(train_kl_loss, label='Train Loss', color='blue')
+    plt.plot(val_kl_loss, label='Validation Loss', color='red')
+    plt.title(f'Training Vs Validation KL Loss')
     plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
+    plt.ylabel('Loss')
     plt.legend()
     plt.grid()
-    name = os.path.join(plots_file_path, 'acc_and_loss.jpeg')
+
+
+    plt.subplot(1, 3, 3)
+    plt.plot(train_total_loss, label='Train Loss', color='blue')
+    plt.plot(val_total_loss, label='Validation Loss', color='red')
+    plt.title(f'Training Vs Validation Total Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid()
+
+    name = os.path.join(plots_file_path, 'loss_plots.jpeg')
     if os.path.isfile(name):
         os.remove(name)
     plt.savefig(name)
 
-    return plots_file_path
