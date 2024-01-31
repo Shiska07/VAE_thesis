@@ -77,7 +77,8 @@ class PartProtoVAE(LightningModule):
     def step(self, batch, batch_idx):
         x, y = batch
         z, x_hat, p, q = self._run_step(x)
-        recon_loss = F.binary_cross_entropy(x_hat, x, reduction="mean")
+        # recon_loss = F.binary_cross_entropy(x_hat, x, reduction="mean")
+        recon_loss = F.mse_loss(x_hat, x, reduction="mean")
 
         kl = torch.distributions.kl_divergence(q, p)
         kl = kl.mean()
@@ -208,16 +209,16 @@ class PartProtoVAE(LightningModule):
         print(f'\nTest Epoch({self.current_epoch}): rec_loss: {cum_rec_loss}, kl_loss:{cum_kl_loss}, total_loss:{cum_total_loss}')
 
         # store epoch loss
-        self.test_history['val_rec_loss'].append(cum_rec_loss)
-        self.test_history['val_kl_loss'].append(cum_kl_loss)
-        self.test_history['val_total_loss'].append(cum_total_loss)
+        self.test_history['test_rec_loss'].append(cum_rec_loss)
+        self.test_history['test_kl_loss'].append(cum_kl_loss)
+        self.test_history['test_total_loss'].append(cum_total_loss)
         self.test_step_losses.clear()
 
         if self.global_rank == 0:
             test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
             create_dir(test_dir)
 
-            # Saving test results.
+            # Saving test results
             x, y = self.test_outs
             z, x_hat, p, q = self._run_step(x)
 
@@ -240,10 +241,4 @@ class PartProtoVAE(LightningModule):
         with open(save_path, 'w') as json_file:
             json.dump(self.test_history, json_file)
 
-    def save_entire_model(self, model_dest):
-        # save the entire model
-        model_architecture_path = os.path.join(model_dest, 'arc.pth')
-        model_weights_path = os.path.join(model_dest, 'weights.pth')
-        torch.save(self.model, model_architecture_path)
-        torch.save(self.model.state_dict(), model_weights_path)
-        print(f'Model saved at {model_dest}')
+

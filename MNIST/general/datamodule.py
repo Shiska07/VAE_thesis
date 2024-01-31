@@ -3,7 +3,6 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from torchvision import transforms
-# Note - you must have torchvision installed for this example
 from torchvision.datasets import MNIST
 
 
@@ -16,7 +15,8 @@ class MNISTDataModule(pl.LightningDataModule):
         self.val_size = val_size
         self.random_seed = random_seed
         self.num_workers = num_workers
-        self.transform = transforms.Compose([transforms.ToTensor()
+        self.transform = transforms.Compose([transforms.ToTensor(),
+                                             transforms.Normalize((0.1307,), (0.3081,))
                                              ])
 
     def prepare_data(self):

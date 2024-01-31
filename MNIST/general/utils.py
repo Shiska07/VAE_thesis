@@ -57,10 +57,14 @@ def save_plots(train_epoch_hist, val_epoch_hist, plots_file_path):
     train_kl_loss = train_epoch_hist['train_kl_loss']
     train_total_loss = train_epoch_hist['train_total_loss']
 
+
     # pop(0) as the first value is from sanity check
-    val_rec_loss = val_epoch_hist['val_rec_loss'].pop(0)
-    val_kl_loss = val_epoch_hist['val_kl_loss'].pop(0)
-    val_total_loss = val_epoch_hist['val_total_loss'].pop(0)
+    val_epoch_hist['val_rec_loss'].pop(0)
+    val_epoch_hist['val_kl_loss'].pop(0)
+    val_epoch_hist['val_total_loss'].pop(0)
+    val_rec_loss = val_epoch_hist['val_rec_loss']
+    val_kl_loss = val_epoch_hist['val_kl_loss']
+    val_total_loss = val_epoch_hist['val_total_loss']
 
 
     plt.figure(figsize=(24, 6))
@@ -83,7 +87,6 @@ def save_plots(train_epoch_hist, val_epoch_hist, plots_file_path):
     plt.legend()
     plt.grid()
 
-
     plt.subplot(1, 3, 3)
     plt.plot(train_total_loss, label='Train Loss', color='blue')
     plt.plot(val_total_loss, label='Validation Loss', color='red')
@@ -97,4 +100,4 @@ def save_plots(train_epoch_hist, val_epoch_hist, plots_file_path):
     if os.path.isfile(name):
         os.remove(name)
     plt.savefig(name)
-
+    plt.close('all')

@@ -1,4 +1,5 @@
 import os
+import torch
 from argparse import ArgumentParser
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -6,6 +7,15 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from task import PartProtoVAE
 from datamodule import MNISTDataModule
 from utils import load_parameters, create_dir, save_plots
+
+
+def save_entire_model(model, model_dest):
+    # save the entire model
+    model_architecture_path = os.path.join(model_dest, 'arc.pth')
+    model_weights_path = os.path.join(model_dest, 'weights.pth')
+    torch.save(model, model_architecture_path)
+    torch.save(model.state_dict(), model_weights_path)
+    print(f'Model saved at {model_dest}')
 
 def main_func(params_dir_path):
     for filename in os.listdir(directory_path):
@@ -30,8 +40,6 @@ def main_func(params_dir_path):
 
 
             # Creating Logging Directory, callbacks and checkpoint
-            create_dir(params['plots_dir'])
-
             best_model_ckpt = os.path.join(params['ckpt_path'], params['logging_name'])
             create_dir(best_model_ckpt)
 
@@ -77,7 +85,7 @@ def main_func(params_dir_path):
             # save model
             model_dest = os.path.join(params['ckpt_path'], params['logging_name'], 'complete_model')
             create_dir(model_dest)
-            model.save_entire_model(model_dest)
+            save_entire_model(model, model_dest)
     
 
 
