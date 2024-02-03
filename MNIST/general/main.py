@@ -8,6 +8,7 @@ from task import PartProtoVAE
 from datamodule import MNISTDataModule
 from utils import load_parameters, create_dir, save_plots
 
+from settings import img_size, val_ratio
 
 def save_entire_model(model, model_dest):
     # save the entire model
@@ -27,14 +28,17 @@ def main_func(params_dir_path):
             params['filename'] = filename
 
             data_module = MNISTDataModule(params['batch_size'], params['data_dir'], params['random_seed'],
-                                          params['val_ratio'], params['num_dl_workers'])
+                                          val_ratio, params['num_dl_workers'])
 
 
             # Iniatiating the model
-            model = PartProtoVAE(params['input_height'],
+            model = PartProtoVAE(img_size,
                                  params['input_channels'],
+                                 params['ce_coeff'],
                                  params['kl_coeff'],
-                                 params['latent_channels'],
+                                 params['recon_coeff'],
+                                 params['clst_coeff'],
+                                 params['sep_coeff'],
                                  params['lr']
             )
 
@@ -83,7 +87,7 @@ def main_func(params_dir_path):
             save_plots(train_epoch_hist, val_epoch_hist, hist_path)
 
             # save model
-            model_dest = os.path.join(params['ckpt_path'], params['logging_name'], 'complete_model')
+            model_dest = os.path.join(params['ckpt_path'], params['logging_name'], 'saved_model')
             create_dir(model_dest)
             save_entire_model(model, model_dest)
     

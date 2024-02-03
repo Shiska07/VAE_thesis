@@ -9,6 +9,8 @@ import torchsummary
 import torchvision.utils as vutils
 from pytorch_lightning import LightningModule
 from torch.nn import functional as F
+
+from general.settings import prototype_shape, num_classes
 from utils import create_dir
 from components import EncoderBlock, DecoderBlock
 
@@ -16,13 +18,15 @@ from components import EncoderBlock, DecoderBlock
 class PartProtoVAE(LightningModule):
     def __init__(
         self,
-        input_height=28,
-        input_channels = 1,
-        kl_coeff = 0.1,
-        latent_channels = 16,
+        input_height,
+        input_channels,
+        ce_coeff,
+        kl_coeff,
+        recon_coeff,
+        clst_coeff,
+        sep_coeff,
         lr = 1e-4,
-        enc_out_channels = 32,
-        ksize = 3
+
     ):
 
         super().__init__()
@@ -30,13 +34,21 @@ class PartProtoVAE(LightningModule):
         # saving hparams to model state dict
         self.save_hyperparameters()
 
-        self.lr = lr
-        self.kl_coeff = kl_coeff
-        self.ksize = ksize
-        self.enc_out_channels = enc_out_channels
-        self.latent_channels = latent_channels
+
         self.input_height = input_height
         self.input_channels = input_channels
+        self.ce_coeff=ce_coeff
+        self.kl_coeff = kl_coeff
+        self.recon_coeff = recon_coeff
+        self.clst_coeff = clst_coeff
+        self.sep_cpeff = sep_coeff
+        self.lr = lr
+        self.num_classes = num_classes
+        self.prototype_shape = prototype_shape
+        self.num_prototypes = prototype_shape[0]
+        self.prototype_activation_function = 'log'
+        self.ksize = 3
+
 
         self.encoder = EncoderBlock(self.input_channels, self.latent_channels, self.ksize)
         self.decoder = DecoderBlock(self.latent_channels, self.input_channels, self.ksize)
@@ -56,6 +68,17 @@ class PartProtoVAE(LightningModule):
         self.val_history = {'val_rec_loss': [], 'val_kl_loss': [], 'val_total_loss':[], 'val_acc': []}
         self.test_history = {'test_rec_loss': [], 'test_kl_loss': [], 'test_total_loss':[], 'test_acc': []}
 
+        '''
+        Initialization of prototype class identity. Thi part is from PrototPNet Implementation.
+        '''
+        assert (self.num_prototypes % self.num_classes == 0)
+        # a onehot indication matrix for each prototype's class identity
+        self.prototype_class_identity = torch.zeros(self.num_prototypes,
+                                                    self.num_classes)
+
+        num_prototypes_per_class = self.num_prototypes // self.num_classes
+        for j in range(self.num_prototypes):
+            self.prototype_class_identity[j, j // num_prototypes_per_class] = 1
 
     def forward(self, x):
         mu, logvar = self.encoder(x)
