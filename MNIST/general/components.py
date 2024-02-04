@@ -27,7 +27,7 @@ class EncoderBottleneck(nn.Module):
         self.conv_logvar = nn.Conv2d(encoder_out_channels, latent_channels, kernel_size=1, stride=1, padding="valid")
 
     def forward(self, x):
-        mu = F.sigmoid(self.conv_mu(x)
+        mu = F.sigmoid(self.conv_mu(x))
         logvar = F.sigmoid(self.conv_logvar(x))
         return mu, logvar
 
@@ -37,9 +37,9 @@ class DecoderBlock(nn.Module):
         super(DecoderBlock, self).__init__()
         self.conv1 = nn.Conv2d(latent_channels, encoder_out_channels, kernel_size=1, stride=1, padding="valid")
         self.deconv1 = nn.ConvTranspose2d(encoder_out_channels, 32, kernel_size=ksize, stride=2, padding=1, output_padding=1)
-        self.deconv2 = nn.ConvTranspose2d(32, 32, kernel_size=ksize, stride=2, padding=1, output_padding=1)
+        self.deconv2 = nn.ConvTranspose2d(32, 32, kernel_size=ksize, stride=2, padding=1)
         self.deconv3 = nn.ConvTranspose2d(32, 32, kernel_size=ksize, stride=2, padding=1, output_padding=1)
-        self.deconv4 = nn.ConvTranspose2d(32, output_channels, kernel_size=ksize, stride=2, padding=1, output_padding=1)
+        self.deconv4 = nn.ConvTranspose2d(32, output_channels, kernel_size=ksize, stride=2, padding=1,  output_padding=1)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -55,6 +55,7 @@ class ClassifierBlock(nn.Module):
         super(ClassifierBlock, self).__init__()
         self.prototype_activation_function = prototype_activation_function
         self.prototype_shape = prototype_shape
+        self.num_prototypes = prototype_shape[0]
         self.n_classes = n_classes
         self.epsilon = 1e-4
 
@@ -67,7 +68,7 @@ class ClassifierBlock(nn.Module):
         self.ones = nn.Parameter(torch.ones(self.prototype_shape),
                                  requires_grad=False)
 
-        self.last_layer = nn.Linear(self.num_prototypes, self.num_classes,
+        self.last_layer = nn.Linear(self.num_prototypes, self.n_classes,
                                     bias=False)  # do not use bias
 
         # Initialize weights for the last layer
@@ -134,7 +135,7 @@ class ClassifierBlock(nn.Module):
             return logits, min_distances
 
 
-if '__name__' == '__main__':
+if __name__ == '__main__':
     encoder = EncoderBlock()
     print(encoder)
     print(torchsummary.summary(encoder, (1, 28, 28)))
