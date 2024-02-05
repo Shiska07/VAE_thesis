@@ -4,11 +4,12 @@ from argparse import ArgumentParser
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from task import PartProtoVAE
+from model import PartProtoVAE
 from datamodule import MNISTDataModule
 from utils import load_parameters, create_dir, save_plots
 
 from settings import img_size, val_ratio
+
 
 def save_entire_model(model, model_dest):
     # save the entire model
@@ -17,6 +18,7 @@ def save_entire_model(model, model_dest):
     torch.save(model, model_architecture_path)
     torch.save(model.state_dict(), model_weights_path)
     print(f'Model saved at {model_dest}')
+
 
 def main_func(params_dir_path):
     for filename in os.listdir(directory_path):
@@ -30,7 +32,6 @@ def main_func(params_dir_path):
             data_module = MNISTDataModule(params['batch_size'], params['data_dir'], params['random_seed'],
                                           val_ratio, params['num_dl_workers'])
 
-
             # Iniatiating the model
             model = PartProtoVAE(img_size,
                                  params['input_channels'],
@@ -40,8 +41,7 @@ def main_func(params_dir_path):
                                  params['clst_coeff'],
                                  params['sep_coeff'],
                                  params['lr']
-            )
-
+                                 )
 
             # Creating Logging Directory, callbacks and checkpoint
             best_model_ckpt = os.path.join(params['ckpt_path'], params['logging_name'])
@@ -66,12 +66,12 @@ def main_func(params_dir_path):
             # initialize trainer
             tb_logger = TensorBoardLogger(params['logging_dir'], name=params['logging_name'], log_graph=False)
             trainer = pl.Trainer(
-                accelerator = params['accelerator'],
-                max_epochs = params['max_epochs'],
-                strategy = params['strategy'],
+                accelerator=params['accelerator'],
+                max_epochs=params['max_epochs'],
+                strategy=params['strategy'],
                 callbacks=[early_stopping_callback, checkpoint_callback],
                 enable_progress_bar=True, check_val_every_n_epoch=1, enable_checkpointing=True,
-                logger = tb_logger
+                logger=tb_logger
             )
 
             trainer.fit(model, data_module)
@@ -90,7 +90,6 @@ def main_func(params_dir_path):
             model_dest = os.path.join(params['ckpt_path'], params['logging_name'], 'saved_model')
             create_dir(model_dest)
             save_entire_model(model, model_dest)
-    
 
 
 if __name__ == '__main__':
@@ -104,4 +103,3 @@ if __name__ == '__main__':
 
     # Calling the main function
     main_func(directory_path)
-    

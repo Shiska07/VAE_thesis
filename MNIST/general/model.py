@@ -8,11 +8,12 @@ import torch
 import torchsummary
 import torchvision.utils as vutils
 from pytorch_lightning import LightningModule
+from torch import nn
 from torch.nn import functional as F
 
-from general.settings import prototype_shape, num_classes
 from utils import create_dir
-from components import EncoderBlock, DecoderBlock
+from general.settings import prototype_shape, n_classes, encoder_out_channels
+from vae_components import EncoderBlock, EncoderBottleneck,DecoderBlock
 
 
 class PartProtoVAE(LightningModule):
@@ -26,6 +27,7 @@ class PartProtoVAE(LightningModule):
         clst_coeff,
         sep_coeff,
         lr = 1e-4,
+        init_weights=True
 
     ):
 
@@ -34,24 +36,21 @@ class PartProtoVAE(LightningModule):
         # saving hparams to model state dict
         self.save_hyperparameters()
 
+        self.lr = lr
+        self.ksize = 3
+        self.epsilon = 1e-4
+        self.n_classes = n_classes
 
-        self.input_height = input_height
-        self.input_channels = input_channels
-        self.ce_coeff=ce_coeff
+        # coeffs for loss
+        self.ce_coeff = ce_coeff
         self.kl_coeff = kl_coeff
         self.recon_coeff = recon_coeff
         self.clst_coeff = clst_coeff
         self.sep_cpeff = sep_coeff
-        self.lr = lr
-        self.num_classes = num_classes
-        self.prototype_shape = prototype_shape
-        self.num_prototypes = prototype_shape[0]
-        self.prototype_activation_function = 'log'
-        self.ksize = 3
 
-
-        self.encoder = EncoderBlock(self.input_channels, self.latent_channels, self.ksize)
-        self.decoder = DecoderBlock(self.latent_channels, self.input_channels, self.ksize)
+        self.input_height = input_height
+        self.input_channels = input_channels
+        self.latent_channels = prototype_shape[1]
 
         # lists to store loses from each step
         # losses sores as tuple (rec_loss, kl_loss, total_loss)
@@ -68,9 +67,20 @@ class PartProtoVAE(LightningModule):
         self.val_history = {'val_rec_loss': [], 'val_kl_loss': [], 'val_total_loss':[], 'val_acc': []}
         self.test_history = {'test_rec_loss': [], 'test_kl_loss': [], 'test_total_loss':[], 'test_acc': []}
 
+        # VAE COMPONENTS
+        self.encoder = EncoderBlock(self.input_channels, encoder_out_channels)
+        self.bottleneck = EncoderBottleneck(encoder_out_channels, self.latent_channels)
+        self.decoder = DecoderBlock(encoder_out_channels, self.latent_channels, self.input_channels)
+
         '''
         Initialization of prototype class identity. Thi part is from PrototPNet Implementation.
         '''
+
+        self.prototype_shape = prototype_shape
+        self.num_prototypes = prototype_shape[0]
+        self.prototype_activation_function = 'log'
+
+
         assert (self.num_prototypes % self.num_classes == 0)
         # a onehot indication matrix for each prototype's class identity
         self.prototype_class_identity = torch.zeros(self.num_prototypes,
@@ -80,15 +90,67 @@ class PartProtoVAE(LightningModule):
         for j in range(self.num_prototypes):
             self.prototype_class_identity[j, j // num_prototypes_per_class] = 1
 
-    def forward(self, x):
-        mu, logvar = self.encoder(x)
-        p, q, z = self.sample(mu, logvar)
-        return self.decoder(z)
+        # PROTOTYPE AND CLASSIFIER COMPONENTS
+        self.prototype_vectors = nn.Parameter(torch.rand(self.prototype_shape),
+                                              requires_grad=True)
 
-    def _run_step(self, x):
-        mu, logvar = self.encoder(x)
-        p, q, z = self.sample(mu, logvar)
-        return z, self.decoder(z), p, q
+        self.ones = nn.Parameter(torch.ones(self.prototype_shape),
+                                 requires_grad=False)
+
+        self.last_layer = nn.Linear(self.num_prototypes, self.n_classes,
+                                    bias=False)  # do not use bias
+
+        # itntialize weights for the last layer
+        if init_weights:
+            self._initialize_weights()
+
+    def set_last_layer_incorrect_connection(self, incorrect_strength):
+        '''
+        the incorrect strength will be actual strength if -0.5 then input -0.5
+        '''
+        positive_one_weights_locations = torch.t(self.prototype_class_identity)
+        negative_one_weights_locations = 1 - positive_one_weights_locations
+
+        correct_class_connection = 1
+        incorrect_class_connection = incorrect_strength
+        self.last_layer.weight.data.copy_(
+            correct_class_connection * positive_one_weights_locations
+            + incorrect_class_connection * negative_one_weights_locations)
+
+    def _initialize_weights(self):
+        self.set_last_layer_incorrect_connection(incorrect_strength=-0.5)
+
+    def _l2_convolution(self, x):
+
+        # apply self.prototype_vectors as l2-convolution filters on input x
+        x2 = x ** 2
+        x2_patch_sum = F.conv2d(input=x2, weight=self.ones)
+
+        p2 = self.prototype_vectors ** 2
+        p2 = torch.sum(p2, dim=(1, 2, 3))
+        # p2 is a vector of shape (num_prototypes,)
+        # then we reshape it to (num_prototypes, 1, 1)
+        p2_reshape = p2.view(-1, 1, 1)
+
+        xp = F.conv2d(input=x, weight=self.prototype_vectors)
+        intermediate_result = - 2 * xp + p2_reshape  # use broadcast
+        # x2_patch_sum and intermediate_result are of the same shape
+        distances = F.relu(x2_patch_sum + intermediate_result)
+
+        return distances
+
+    def prototype_distances(self, x):
+
+        # x is the sample from bottleneck
+        distances = self._l2_convolution(x)
+        return distances
+
+    def distance_2_similarity(self, distances):
+        if self.prototype_activation_function == 'log':
+            return torch.log((distances + 1) / (distances + self.epsilon))
+        elif self.prototype_activation_function == 'linear':
+            return -distances
+        return self.prototype_activation_function(distances)
 
     def sample(self, mu, log_var):
         std = torch.exp(log_var / 2)
@@ -97,15 +159,59 @@ class PartProtoVAE(LightningModule):
         z = q.rsample()
         return p, q, z
 
+    def forward(self, x):
+        encoder_out = self.encoder(x)
+        mu, logvar = self.bottleneck(encoder_out)
+        p, q, z = self.sample(mu, logvar)
+
+        # get reconstruction
+        x_hat = self.decoder(z)
+
+        '''
+        ProtoPNet
+        '''
+        # global min pooling because min distance corresponds to max similarity
+        distances = self.prototype_distances(z)
+        min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
+        min_distances = min_distances.view(-1, self.num_prototypes)
+        prototype_activations = self.distance_2_similarity(min_distances)
+
+        # get prediction
+        logits = self.last_layer(prototype_activations)
+        return logits, min_distances, x_hat
+
+    def _run_step(self, x):
+        encoder_out = self.encoder(x)
+        mu, logvar = self.bottleneck(encoder_out)
+        p, q, z = self.sample(mu, logvar)
+
+        # get reconstruction
+        x_hat = self.decoder(z)
+
+        '''
+        ProtoPNet
+        '''
+        # global min pooling because min distance corresponds to max similarity
+        distances = self.prototype_distances(z)
+        min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
+        min_distances = min_distances.view(-1, self.num_prototypes)
+        prototype_activations = self.distance_2_similarity(min_distances)
+
+        # get prediction
+        logits = self.last_layer(prototype_activations)
+        return p, q, z, x_hat, logits, min_distances
+
     def step(self, batch, batch_idx):
         x, y = batch
-        z, x_hat, p, q = self._run_step(x)
+        p, q, z, x_hat, logits, min_distances = self._run_step(x)
+
         # recon_loss = F.binary_cross_entropy(x_hat, x, reduction="mean")
         recon_loss = F.mse_loss(x_hat, x, reduction="mean")
 
         kl = torch.distributions.kl_divergence(q, p)
         kl = kl.mean()
         kl *= self.kl_coeff
+
 
         loss = kl + recon_loss
 
