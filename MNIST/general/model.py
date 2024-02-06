@@ -52,6 +52,10 @@ class PartProtoVAE(LightningModule):
         self.input_channels = input_channels
         self.latent_channels = prototype_shape[1]
 
+        # some params from ProtoPNet
+        self.class_specific = True
+        self.use_l1_mask = True
+
         # lists to store loses from each step
         # losses sores as tuple (rec_loss, kl_loss, total_loss)
         self.training_step_losses = []
@@ -159,27 +163,6 @@ class PartProtoVAE(LightningModule):
         z = q.rsample()
         return p, q, z
 
-    def forward(self, x):
-        encoder_out = self.encoder(x)
-        mu, logvar = self.bottleneck(encoder_out)
-        p, q, z = self.sample(mu, logvar)
-
-        # get reconstruction
-        x_hat = self.decoder(z)
-
-        '''
-        ProtoPNet
-        '''
-        # global min pooling because min distance corresponds to max similarity
-        distances = self.prototype_distances(z)
-        min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
-        min_distances = min_distances.view(-1, self.num_prototypes)
-        prototype_activations = self.distance_2_similarity(min_distances)
-
-        # get prediction
-        logits = self.last_layer(prototype_activations)
-        return logits, min_distances, x_hat
-
     def _run_step(self, x):
         encoder_out = self.encoder(x)
         mu, logvar = self.bottleneck(encoder_out)
@@ -201,6 +184,7 @@ class PartProtoVAE(LightningModule):
         logits = self.last_layer(prototype_activations)
         return p, q, z, x_hat, logits, min_distances
 
+
     def step(self, batch, batch_idx):
         x, y = batch
         p, q, z, x_hat, logits, min_distances = self._run_step(x)
@@ -208,21 +192,113 @@ class PartProtoVAE(LightningModule):
         # recon_loss = F.binary_cross_entropy(x_hat, x, reduction="mean")
         recon_loss = F.mse_loss(x_hat, x, reduction="mean")
 
+        # kl loss
         kl = torch.distributions.kl_divergence(q, p)
         kl = kl.mean()
         kl *= self.kl_coeff
 
+        # cross entropy loss
+        cross_entropy = torch.nn.functional.cross_entropy(logits, y)
 
-        loss = kl + recon_loss
+        # CLST and SEP Cost
+        if self.class_specific:
+            max_dist = (self.prototype_shape[1]
+                        * self.prototype_shape[2]
+                        * self.prototype_shape[3])
 
-        logs = {
-            "recon_loss": recon_loss,
-            "kl": kl,
-            "loss": loss,
-        }
+            # prototypes_of_correct_class is a tensor of shape batch_size * num_prototypes
+            # calculate cluster cost
+            prototypes_of_correct_class = torch.t(self.prototype_class_identity[:, y]).cuda()
+            inverted_distances, _ = torch.max((max_dist - min_distances) * prototypes_of_correct_class, dim=1)
+            cluster_cost = torch.mean(max_dist - inverted_distances)
+
+            # calculate separation cost
+            prototypes_of_wrong_class = 1 - prototypes_of_correct_class
+            inverted_distances_to_nontarget_prototypes, _ = \
+                torch.max((max_dist - min_distances) * prototypes_of_wrong_class, dim=1)
+            separation_cost = torch.mean(max_dist - inverted_distances_to_nontarget_prototypes)
+
+            # calculate avg cluster cost
+            avg_separation_cost = \
+                torch.sum(min_distances * prototypes_of_wrong_class, dim=1) / torch.sum(prototypes_of_wrong_class,
+                                                                                        dim=1)
+            avg_separation_cost = torch.mean(avg_separation_cost)
+
+            if self.use_l1_mask:
+                l1_mask = 1 - torch.t(self.prototype_class_identity).cuda()
+                l1 = (self.last_layer.weight * l1_mask).norm(p=1)
+            else:
+                l1 = self.last_layer.weight.norm(p=1)
+
+        else:
+            min_distance, _ = torch.min(min_distances, dim=1)
+            cluster_cost = torch.mean(min_distance)
+            l1 = self.last_layer.weight.norm(p=1)
+
+        # TOTOAL LOSS
+        if self.class_specific:
+            loss = (self.kl_coeff * kl
+                    + self.recon_coeff * recon_loss
+                    + self.ce_coeff * cross_entropy
+                    + self.clst_coeff + cluster_cost
+                    + self.sep_cpeff * separation_cost
+                    + 1e-4 * l1)
+
+            logs = {
+                "recon_loss": recon_loss,
+                "kl": kl,
+                "ce_loss": cross_entropy,
+                "clst_loss": cluster_cost,
+                "sep_los": separation_cost,
+                "total_loss": loss,
+            }
+
+        else: # excluse separation cost if not class specific
+            loss = (self.kl_coeff * kl
+                + self.recon_coeff * recon_loss
+                + self.ce_coeff * cross_entropy
+                + self.clst_coeff + cluster_cost
+                + 1e-4 * l1)
+
+            logs = {
+                "recon_loss": recon_loss,
+                "kl": kl,
+                "ce_loss": cross_entropy,
+                "clst_loss": cluster_cost,
+                "total_loss": loss,
+            }
+
         return loss, logs, x_hat
-    
 
+    '''
+    The forward method is for running data through your model during testing and usage.
+    In this case we want the output logit, reconstruction(we may not need this later) and the min distances. 
+    '''
+    def forward(self, x):
+        encoder_out = self.encoder(x)
+        mu, logvar = self.bottleneck(encoder_out)
+        p, q, z = self.sample(mu, logvar)
+
+        # get reconstruction
+        x_hat = self.decoder(z)
+
+        '''
+        ProtoPNet
+        '''
+        # global min pooling because min distance corresponds to max similarity
+        distances = self.prototype_distances(z)
+        min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
+        min_distances = min_distances.view(-1, self.num_prototypes)
+        prototype_activations = self.distance_2_similarity(min_distances)
+
+        # get prediction
+        logits = self.last_layer(prototype_activations)
+        return logits, min_distances, x_hat
+
+
+    '''
+    Here we return the loss and logs for a single batch.
+    '''
     def training_step(self, batch, batch_idx):
 
         loss, logs , _ = self.step(batch, batch_idx)
@@ -236,6 +312,7 @@ class PartProtoVAE(LightningModule):
         self.log_dict(tr_logs, on_epoch=True, on_step=False)
         self.training_step_losses.append(tuple(tr_logs.values()))
         return loss
+
 
     def validation_step(self, batch, batch_idx):
 
@@ -291,6 +368,9 @@ class PartProtoVAE(LightningModule):
         return cum_rec_loss, cum_kl_loss, cum_total_loss
 
 
+    '''
+    Here we would do the prototype projection depending on the epoch.
+    '''
     def on_train_epoch_end(self):
 
         cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.training_step_losses)
