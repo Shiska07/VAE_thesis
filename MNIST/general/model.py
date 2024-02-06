@@ -66,11 +66,6 @@ class PartProtoVAE(LightningModule):
         self.val_outs = []
         self.test_outs = []
 
-        # dict to store epoch loss
-        self.train_history = {'train_rec_loss': [],  'train_kl_loss':[], 'train_total_loss':[], 'train_acc': []}
-        self.val_history = {'val_rec_loss': [], 'val_kl_loss': [], 'val_total_loss':[], 'val_acc': []}
-        self.test_history = {'test_rec_loss': [], 'test_kl_loss': [], 'test_total_loss':[], 'test_acc': []}
-
         # VAE COMPONENTS
         self.encoder = EncoderBlock(self.input_channels, encoder_out_channels)
         self.bottleneck = EncoderBottleneck(encoder_out_channels, self.latent_channels)
@@ -163,6 +158,32 @@ class PartProtoVAE(LightningModule):
         z = q.rsample()
         return p, q, z
 
+    '''
+    The forward method is for running data through your model during testing and usage.
+    In this case we want the output logit, reconstruction(we may not need this later) and the min distances. 
+    '''
+    def forward(self, x):
+        encoder_out = self.encoder(x)
+        mu, logvar = self.bottleneck(encoder_out)
+        p, q, z = self.sample(mu, logvar)
+
+        # get reconstruction
+        x_hat = self.decoder(z)
+
+        '''
+        ProtoPNet
+        '''
+        # global min pooling because min distance corresponds to max similarity
+        distances = self.prototype_distances(z)
+        min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
+        min_distances = min_distances.view(-1, self.num_prototypes)
+        prototype_activations = self.distance_2_similarity(min_distances)
+
+        # get prediction
+        logits = self.last_layer(prototype_activations)
+        return logits, min_distances, x_hat
+
+
     def _run_step(self, x):
         encoder_out = self.encoder(x)
         mu, logvar = self.bottleneck(encoder_out)
@@ -241,15 +262,16 @@ class PartProtoVAE(LightningModule):
                     + self.recon_coeff * recon_loss
                     + self.ce_coeff * cross_entropy
                     + self.clst_coeff + cluster_cost
-                    + self.sep_cpeff * separation_cost
+                    + self.sep_coeff * separation_cost
                     + 1e-4 * l1)
 
             logs = {
                 "recon_loss": recon_loss,
-                "kl": kl,
+                "kl_loss": kl,
                 "ce_loss": cross_entropy,
                 "clst_loss": cluster_cost,
-                "sep_los": separation_cost,
+                "sep_loss": separation_cost,
+                "l1_loss": l1,
                 "total_loss": loss,
             }
 
@@ -262,39 +284,14 @@ class PartProtoVAE(LightningModule):
 
             logs = {
                 "recon_loss": recon_loss,
-                "kl": kl,
+                "kl_loss": kl,
                 "ce_loss": cross_entropy,
                 "clst_loss": cluster_cost,
+                "l1_loss": l1,
                 "total_loss": loss,
             }
 
         return loss, logs, x_hat
-
-    '''
-    The forward method is for running data through your model during testing and usage.
-    In this case we want the output logit, reconstruction(we may not need this later) and the min distances. 
-    '''
-    def forward(self, x):
-        encoder_out = self.encoder(x)
-        mu, logvar = self.bottleneck(encoder_out)
-        p, q, z = self.sample(mu, logvar)
-
-        # get reconstruction
-        x_hat = self.decoder(z)
-
-        '''
-        ProtoPNet
-        '''
-        # global min pooling because min distance corresponds to max similarity
-        distances = self.prototype_distances(z)
-        min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
-        min_distances = min_distances.view(-1, self.num_prototypes)
-        prototype_activations = self.distance_2_similarity(min_distances)
-
-        # get prediction
-        logits = self.last_layer(prototype_activations)
-        return logits, min_distances, x_hat
-
 
     '''
     Here we return the loss and logs for a single batch.
@@ -309,8 +306,9 @@ class PartProtoVAE(LightningModule):
             new_key = "train_"+str(key)
             tr_logs[new_key] = val
 
+        # automatically accumulates the losss for each epoch and logs
         self.log_dict(tr_logs, on_epoch=True, on_step=False)
-        self.training_step_losses.append(tuple(tr_logs.values()))
+        self.training_step_losses.append(tr_logs)
         return loss
 
 
@@ -324,8 +322,7 @@ class PartProtoVAE(LightningModule):
             val_logs[new_key] = val
 
         self.log_dict(val_logs, on_epoch=True, on_step=False)
-        # store loss as well as reconstructed images
-        self.validation_step_losses.append(tuple(val_logs.values()))
+        self.validation_step_losses.append(val_logs)
 
         if batch_idx == 0:
             self.val_outs = batch
@@ -342,7 +339,7 @@ class PartProtoVAE(LightningModule):
             test_logs[new_key] = val
 
         self.log_dict(test_logs, on_epoch=True, on_step=False)
-        self.test_step_losses.append(tuple(test_logs.values()))
+        self.test_step_losses.append(test_logs)
 
         if batch_idx == 0:
             self.test_outs = batch
@@ -350,49 +347,76 @@ class PartProtoVAE(LightningModule):
         return loss
 
     def get_cumulative_losses(self, losses_list):
+
         num_items = len(losses_list)
+
         cum_rec_loss = 0
         cum_kl_loss = 0
+        cum_ce_loss = 0
+        cum_clst_loss = 0
+        cum_sep_loss = 0
+        cum_l1_loss = 0
         cum_total_loss = 0
 
-        for rec_loss, kl_loss, total_loss in losses_list:
-            cum_rec_loss += rec_loss.item()
-            cum_kl_loss += kl_loss.item()
-            cum_total_loss += total_loss.item()
+        for loss_dict in losses_list:
+            cum_rec_loss += loss_dict["recon_loss"]
+            cum_kl_loss += loss_dict["kl_loss"]
+            cum_ce_loss += loss_dict["ce_loss"]
+            cum_clst_loss += loss_dict["clst_loss"]
+            cum_sep_loss += loss_dict["sep_loss"]
+            cum_l1_loss += loss_dict["sep_loss"]
+            cum_total_loss += loss_dict["total_loss"]
+
 
         # get average loss
-        cum_rec_loss += cum_rec_loss / num_items
-        cum_kl_loss += cum_kl_loss / num_items
-        cum_total_loss += cum_total_loss / num_items
+        avg_rec_loss = cum_rec_loss / num_items
+        avg_kl_loss = cum_kl_loss / num_items
+        avg_ce_loss = cum_ce_loss / num_items
+        avg_clst_loss = cum_clst_loss / num_items
+        avg_sep_loss = cum_sep_loss / num_items
+        avg_l1_loss = cum_l1_loss / num_items
+        avg_total_loss = cum_total_loss / num_items
 
-        return cum_rec_loss, cum_kl_loss, cum_total_loss
-
+        return avg_rec_loss, avg_kl_loss, avg_ce_loss, \
+        avg_clst_loss, avg_sep_loss, avg_l1_loss, avg_total_loss
 
     '''
     Here we would do the prototype projection depending on the epoch.
     '''
     def on_train_epoch_end(self):
 
-        cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.training_step_losses)
-        print(f'\nTraining Epoch({self.current_epoch}): rec_loss: {cum_rec_loss}, kl_loss:{cum_kl_loss}, total_loss:{cum_total_loss}')
+        # calculate colulative losses per epoch
+        avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
+            avg_l1_loss, avg_total_loss = self.get_cumulative_losses(self.training_step_losses)
 
-        # store epoch loss
-        self.train_history['train_rec_loss'].append(cum_rec_loss)
-        self.train_history['train_kl_loss'].append(cum_kl_loss)
-        self.train_history['train_total_loss'].append(cum_total_loss)
+        print(f"\nTraining Epoch[{self.current_epoch}]:\n \
+                rec_loss: {avg_rec_loss}\n\
+                kl_loss: {avg_kl_loss}\n\
+                ce_loss: {avg_ce_loss}\n\
+                clst_loss: {avg_clst_loss}\n\
+                sap_loss: {avg_sep_loss}\n\
+                l1_loss: {avg_l1_loss}\n\
+                total_loss: {avg_total_loss}\n")
+
         self.training_step_losses.clear()
 
 
     def on_validation_epoch_end(self):
-        cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.validation_step_losses)
-        print(f'\nValidation Epoch({self.current_epoch}): rec_loss: {cum_rec_loss}, kl_loss:{cum_kl_loss}, total_loss:{cum_total_loss}')
+        # calculate colulative losses per epoch
+        avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
+            avg_l1_loss, avg_total_loss = self.get_cumulative_losses(
+            self.validation_step_losses)
 
-        # store epoch loss
-        self.val_history['val_rec_loss'].append(cum_rec_loss)
-        self.val_history['val_kl_loss'].append(cum_kl_loss)
-        self.val_history['val_total_loss'].append(cum_total_loss)
+        print(f"\nValidation Epoch[{self.current_epoch}]:\n \
+                        rec_loss: {avg_rec_loss}\n\
+                        kl_loss: {avg_kl_loss}\n\
+                        ce_loss: {avg_ce_loss}\n\
+                        clst_loss: {avg_clst_loss}\n\
+                        sap_loss: {avg_sep_loss}\n\
+                        l1_loss: {avg_l1_loss}\n\
+                        total_loss: {avg_total_loss}\n")
+
         self.validation_step_losses.clear()
-        self.log("val_loss", cum_total_loss)
 
         if self.global_rank == 0:
             val_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "validation_results")
@@ -400,7 +424,7 @@ class PartProtoVAE(LightningModule):
 
             # Saving validation results.
             x, y = self.val_outs
-            z, x_hat, p, q = self._run_step(x)
+            p, q, z, x_hat, logits, min_distances = self._run_step(x)
 
             if self.current_epoch == 0:
                 grid = vutils.make_grid(x, nrow=8, normalize=False)
@@ -412,15 +436,20 @@ class PartProtoVAE(LightningModule):
             self.logger.experiment.add_image(f"recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
 
-
     def on_test_epoch_end(self):
-        cum_rec_loss, cum_kl_loss, cum_total_loss = self.get_cumulative_losses(self.test_step_losses)
-        print(f'\nTest Epoch({self.current_epoch}): rec_loss: {cum_rec_loss}, kl_loss:{cum_kl_loss}, total_loss:{cum_total_loss}')
+        avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
+            avg_l1_loss, avg_total_loss = self.get_cumulative_losses(
+            self.test_step_losses)
 
-        # store epoch loss
-        self.test_history['test_rec_loss'].append(cum_rec_loss)
-        self.test_history['test_kl_loss'].append(cum_kl_loss)
-        self.test_history['test_total_loss'].append(cum_total_loss)
+        print(f"\nTest Epoch[{self.current_epoch}]:\n \
+                               rec_loss: {avg_rec_loss}\n\
+                               kl_loss: {avg_kl_loss}\n\
+                               ce_loss: {avg_ce_loss}\n\
+                               clst_loss: {avg_clst_loss}\n\
+                               sap_loss: {avg_sep_loss}\n\
+                               l1_loss: {avg_l1_loss}\n\
+                               total_loss: {avg_total_loss}\n")
+
         self.test_step_losses.clear()
 
         if self.global_rank == 0:
@@ -429,7 +458,7 @@ class PartProtoVAE(LightningModule):
 
             # Saving test results
             x, y = self.test_outs
-            z, x_hat, p, q = self._run_step(x)
+            p, q, z, x_hat, logits, min_distances = self._run_step(x)
 
             grid = vutils.make_grid(x, nrow=8, normalize=False)
             vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
