@@ -5,10 +5,10 @@ import json
 from os.path import join
 
 import torch
-import torchvision.utils as vutils
-from pytorch_lightning import LightningModule
 from torch import nn
+import torchvision.utils as vutils
 from torch.nn import functional as F
+from pytorch_lightning import LightningModule
 from helpers import create_dir, get_average_losses
 from settings import class_specific, use_l1_mask, n_classes, encoder_out_channels,\
    prototype_shape, num_prototypes, prototype_activation_function
@@ -246,7 +246,7 @@ class PartProtoVAE(LightningModule):
             cluster_cost = torch.mean(min_distance)
             l1 = self.last_layer.weight.norm(p=1)
 
-        # TOTOAL LOSS
+        # TOTAL LOSS
         if class_specific:
             loss = (self.kl_coeff * kl
                     + self.recon_coeff * recon_loss
@@ -289,13 +289,17 @@ class PartProtoVAE(LightningModule):
     def training_step(self, batch, batch_idx):
 
         loss, logs , _ = self.step(batch, batch_idx)
+        tag = "train"
+        for key, val in logs.items():
+            self.logger.experiment.add_scalars(key, {tag:val}, self.global_step)
+
         tr_logs = dict()
         for key, val in logs.items():
             new_key = str(key)+"/train"
             tr_logs[new_key] = val
 
         # automatically accumulates the losss for each epoch and logs
-        self.log_dict(tr_logs, on_epoch=True, on_step=False)
+        #self.log_dict(tr_logs, on_epoch=True, on_step=False)
         self.training_step_losses.append(tr_logs)
         return loss
 
@@ -303,12 +307,16 @@ class PartProtoVAE(LightningModule):
     def validation_step(self, batch, batch_idx):
 
         loss, logs, x_hat = self.step(batch, batch_idx)
+        tag = "val"
+        for key, val in logs.items():
+            self.logger.experiment.add_scalars(key, {tag: val}, self.global_step)
+
         val_logs = dict()
         for key, val in logs.items():
             new_key = str(key)+"/val"
             val_logs[new_key] = val
 
-        self.log_dict(val_logs, on_epoch=True, on_step=False)
+        # self.log_dict(val_logs, on_epoch=True, on_step=False)
         self.validation_step_losses.append(val_logs)
 
         if batch_idx == 0:
@@ -319,19 +327,23 @@ class PartProtoVAE(LightningModule):
     def test_step(self, batch, batch_idx):
 
         loss, logs, x_hat = self.step(batch, batch_idx)
+        tag = "test"
+
+        for key, val in logs.items():
+            self.logger.experiment.add_scalars(key, {tag: val}, self.global_step)
+
         test_logs = dict()
         for key, val in logs.items():
             new_key = str(key)+"/test"
             test_logs[new_key] = val
 
-        self.log_dict(test_logs, on_epoch=True, on_step=False)
+        # self.log_dict(test_logs, on_epoch=True, on_step=False)
         self.test_step_losses.append(test_logs)
 
         if batch_idx == 0:
             self.test_outs = batch
 
         return loss
-
 
     '''
     Here we would do the prototype projection depending on the epoch.
@@ -376,22 +388,24 @@ class PartProtoVAE(LightningModule):
         self.log("avg_total_val_loss", avg_total_loss)
 
         # to save reconstructed images
-        if self.global_rank == 0:
-            val_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "validation_results")
-            create_dir(val_dir)
+        val_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "validation_results")
+        create_dir(val_dir)
 
-            # Saving validation results.
-            x, y = self.val_outs
-            p, q, z, x_hat, logits, min_distances = self._run_step(x)
+        # Saving validation results. val_outs contain very first batch
+        x, y = self.val_outs
+        p, q, z, x_hat, logits, min_distances = self._run_step(x)
 
-            if self.current_epoch == 0:
-                grid = vutils.make_grid(x, nrow=8, normalize=False)
-                vutils.save_image(x, join(val_dir, f"orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-                self.logger.experiment.add_image(f"orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        # If this is the first epoch save true images
+        if self.current_epoch == 0:
+            grid = vutils.make_grid(x, nrow=8, normalize=False)
+            vutils.save_image(x, join(val_dir, f"orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+            self.logger.experiment.add_image(f"orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
-            grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
-            vutils.save_image(x_hat, join(val_dir, f"recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-            self.logger.experiment.add_image(f"recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        # save reconstructions of the first batch of validation images for each
+        # epoch
+        grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
+        vutils.save_image(x_hat, join(val_dir, f"recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+        self.logger.experiment.add_image(f"recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
 
     def on_test_epoch_end(self):
@@ -410,21 +424,22 @@ class PartProtoVAE(LightningModule):
 
         self.test_step_losses.clear()
 
-        if self.global_rank == 0:
-            test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
-            create_dir(test_dir)
+        test_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "test_results")
+        create_dir(test_dir)
 
-            # Saving test results
-            x, y = self.test_outs
-            p, q, z, x_hat, logits, min_distances = self._run_step(x)
+        # Saving test results. test_outs contains images from the very first batch
+        x, y = self.test_outs
+        p, q, z, x_hat, logits, min_distances = self._run_step(x)
 
-            grid = vutils.make_grid(x, nrow=8, normalize=False)
-            vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-            self.logger.experiment.add_image(f"test_orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        # save true images of the very fitst batch (test_outs)
+        grid = vutils.make_grid(x, nrow=8, normalize=False)
+        vutils.save_image(x, join(test_dir, f"test_orig_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+        self.logger.experiment.add_image(f"test_orig_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
-            grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
-            vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
-            self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
+        # save reconstruction of the very first batch
+        grid = vutils.make_grid(x_hat, nrow=8, normalize=False)
+        vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
+        self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
 
     def configure_optimizers(self):

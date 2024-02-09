@@ -8,9 +8,7 @@ from datamodule import MNISTDataModule
 from settings import img_size, val_ratio
 from helpers import load_parameters, create_dir, save_plots
 from custom_callbacks import early_stopping_callback, getmodel_ckpt_callback, \
-    ClearPreviousLogsCallback, LogCustomScalarsCallback
-
-
+    clear_prev_logs
 
 def save_entire_model(model, model_dest):
     # save the entire model
@@ -45,9 +43,12 @@ def main_func(params_dir_path):
                                         params['lr']
                                         )
 
+            # clear previous logs
+            logging_dir = os.path.join(params['logging_dir'], params['logging_name'])
+            clear_prev_logs(logging_dir)
+
             # Creating Logging Directory, callbacks and checkpoint
-            best_model_ckpt_path = os.path.join(params['logging_dir'], params[
-                'logging_name'], 'checkpoints')
+            best_model_ckpt_path = os.path.join(logging_dir, 'checkpoints')
             create_dir(best_model_ckpt_path)
 
             checkpoint_callback = getmodel_ckpt_callback(best_model_ckpt_path,
@@ -59,8 +60,7 @@ def main_func(params_dir_path):
                 accelerator=params['accelerator'],
                 max_epochs=params['max_epochs'],
                 strategy=params['strategy'],
-                callbacks=[early_stopping_callback, checkpoint_callback,
-                           ClearPreviousLogsCallback(), LogCustomScalarsCallback()],
+                callbacks=[early_stopping_callback, checkpoint_callback],
                 enable_progress_bar=True,
                 check_val_every_n_epoch=1,
                 enable_checkpointing=True,

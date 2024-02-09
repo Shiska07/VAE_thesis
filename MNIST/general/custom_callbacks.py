@@ -30,34 +30,12 @@ def getmodel_ckpt_callback(best_model_ckpt_path, params):
 
     return checkpoint_callback
 
-class ClearPreviousLogsCallback(pl.Callback):
-    def __init__(self):
-        super().__init__()
-
-    def on_train_start(self, trainer, pl_module):
-        # Check if the directory exists
-        if os.path.exists(trainer.log_dir):
-            # If it does, delete its contents
-            shutil.rmtree(trainer.log_dir)
-            print(f"Previous logs in {trainer.log_dir} have been cleared.")
-
-# this function logs train and validation losses in the same chart
-class LogCustomScalarsCallback(pl.Callback):
-    def __init__(self):
-        super().__init__()
-        self.writer = None
-
-    def on_train_start(self, trainer, pl_module):
-        # Initialize TensorBoard writer
-        self.writer = SummaryWriter(log_dir=trainer.logger.log_dir)
-
-    def on_train_end(self, trainer, pl_module):
-        train_metric = trainer.logged_metrics
-
-        print(type(train_metric))
-        print(train_metric)
-        # Close TensorBoard writer
-        self.writer.close()
+# clearing logs with the same name
+def clear_prev_logs(dir_path):
+    if os.path.exists(dir_path):
+        # If it does, delete its contents
+        shutil.rmtree(dir_path)
+        print(f"Previous logs in {dir_path} have been cleared.")
 
 
 
