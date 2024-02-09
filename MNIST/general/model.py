@@ -5,7 +5,6 @@ import json
 from os.path import join
 
 import torch
-import torchsummary
 import torchvision.utils as vutils
 from pytorch_lightning import LightningModule
 from torch import nn
@@ -13,7 +12,7 @@ from torch.nn import functional as F
 from helpers import create_dir, get_average_losses
 from settings import class_specific, use_l1_mask, n_classes, encoder_out_channels,\
    prototype_shape, num_prototypes, prototype_activation_function
-from vae_components import EncoderBlock, EncoderBottleneck,DecoderBlock
+from vae_components import EncoderBlock, EncoderBottleneck, DecoderBlock
 
 
 class PartProtoVAE(LightningModule):
@@ -292,7 +291,7 @@ class PartProtoVAE(LightningModule):
         loss, logs , _ = self.step(batch, batch_idx)
         tr_logs = dict()
         for key, val in logs.items():
-            new_key = "train_"+str(key)
+            new_key = str(key)+"/train"
             tr_logs[new_key] = val
 
         # automatically accumulates the losss for each epoch and logs
@@ -306,7 +305,7 @@ class PartProtoVAE(LightningModule):
         loss, logs, x_hat = self.step(batch, batch_idx)
         val_logs = dict()
         for key, val in logs.items():
-            new_key = "val_"+str(key)
+            new_key = str(key)+"/val"
             val_logs[new_key] = val
 
         self.log_dict(val_logs, on_epoch=True, on_step=False)
@@ -322,7 +321,7 @@ class PartProtoVAE(LightningModule):
         loss, logs, x_hat = self.step(batch, batch_idx)
         test_logs = dict()
         for key, val in logs.items():
-            new_key = "test_" + str(key)
+            new_key = str(key)+"/test"
             test_logs[new_key] = val
 
         self.log_dict(test_logs, on_epoch=True, on_step=False)
@@ -342,7 +341,7 @@ class PartProtoVAE(LightningModule):
         # calculate colulative losses per epoch
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
             avg_l1_loss, avg_total_loss = get_average_losses(
-            self.training_step_losses, "train_")
+            self.training_step_losses, "/train")
 
         print(f"\nTraining Epoch[{self.current_epoch}]:\n\
                 rec_loss: {avg_rec_loss}\n\
@@ -360,7 +359,7 @@ class PartProtoVAE(LightningModule):
         # calculate colulative losses per epoch
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
             avg_l1_loss, avg_total_loss = get_average_losses(
-            self.validation_step_losses, "val_")
+            self.validation_step_losses, "/val")
 
         print(f"\nValidation Epoch[{self.current_epoch}]:\n\
                 rec_loss: {avg_rec_loss}\n\
@@ -374,7 +373,7 @@ class PartProtoVAE(LightningModule):
         self.validation_step_losses.clear()
 
         # log this for early stopping
-        self.log("val_loss", avg_total_loss)
+        self.log("avg_total_val_loss", avg_total_loss)
 
         # to save reconstructed images
         if self.global_rank == 0:
@@ -398,7 +397,7 @@ class PartProtoVAE(LightningModule):
     def on_test_epoch_end(self):
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
             avg_l1_loss, avg_total_loss = get_average_losses(
-            self.test_step_losses, "test_")
+            self.test_step_losses, "/test")
 
         print(f"\nTest Epoch[{self.current_epoch}]:\n\
                rec_loss: {avg_rec_loss}\n\

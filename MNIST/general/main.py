@@ -3,11 +3,13 @@ import torch
 from argparse import ArgumentParser
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from model import PartProtoVAE
 from datamodule import MNISTDataModule
-from helpers import load_parameters, create_dir, save_plots
 from settings import img_size, val_ratio
+from helpers import load_parameters, create_dir, save_plots
+from custom_callbacks import early_stopping_callback, getmodel_ckpt_callback, \
+    ClearPreviousLogsCallback, LogCustomScalarsCallback
+
 
 
 def save_entire_model(model, model_dest):
@@ -44,27 +46,12 @@ def main_func(params_dir_path):
                                         )
 
             # Creating Logging Directory, callbacks and checkpoint
-            best_model_ckpt = os.path.join(params['ckpt_path'], params['logging_name'])
-            create_dir(best_model_ckpt)
+            best_model_ckpt_path = os.path.join(params['logging_dir'], params[
+                'logging_name'], 'checkpoints')
+            create_dir(best_model_ckpt_path)
 
-            early_stopping_callback = EarlyStopping(
-                monitor='val_loss',
-                min_delta=0.1,
-                patience=5,
-                verbose=True,
-                mode='min'
-            )
-
-            checkpoint_callback = ModelCheckpoint(
-                monitor='val_loss',
-                dirpath=best_model_ckpt,  # Directory to save checkpoints
-                filename=f"best_model{params['logging_name']}", # Prefix for the
-                # checkpoint
-                # filenames
-                save_top_k=1,  # Save the best model only
-                mode='min',
-                every_n_epochs=1
-            )
+            checkpoint_callback = getmodel_ckpt_callback(best_model_ckpt_path,
+                                                         params)
 
             # initialize trainer
             tb_logger = TensorBoardLogger(params['logging_dir'], name=params['logging_name'], log_graph=False)
@@ -72,11 +59,15 @@ def main_func(params_dir_path):
                 accelerator=params['accelerator'],
                 max_epochs=params['max_epochs'],
                 strategy=params['strategy'],
-                callbacks=[early_stopping_callback, checkpoint_callback],
+                callbacks=[early_stopping_callback, checkpoint_callback,
+                           ClearPreviousLogsCallback(), LogCustomScalarsCallback()],
                 enable_progress_bar=True,
                 check_val_every_n_epoch=1,
                 enable_checkpointing=True,
-                logger=tb_logger
+                logger=tb_logger,
+                limit_train_batches=200,
+                limit_val_batches=1,
+                limit_test_batches=1
             )
 
             trainer.fit(protov_model, data_module)
@@ -92,8 +83,7 @@ def main_func(params_dir_path):
             # save_plots(train_epoch_hist, val_epoch_hist, hist_path)
 
             # save model
-            model_dest = os.path.join(params['ckpt_path'], params['logging_name'],
-                                      'saved_model')
+            model_dest = os.path.join(best_model_ckpt_path, 'saved_model')
 
             create_dir(model_dest)
             save_entire_model(protov_model, model_dest)

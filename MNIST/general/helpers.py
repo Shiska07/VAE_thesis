@@ -19,13 +19,13 @@ def get_average_losses(losses_list, stage):
     cum_total_loss = 0
 
     for loss_dict in losses_list:
-        cum_rec_loss += loss_dict[f"{stage}recon_loss"]
-        cum_kl_loss += loss_dict[f"{stage}kl_loss"]
-        cum_ce_loss += loss_dict[f"{stage}ce_loss"]
-        cum_clst_loss += loss_dict[f"{stage}clst_loss"]
-        cum_sep_loss += loss_dict[f"{stage}sep_loss"]
-        cum_l1_loss += loss_dict[f"{stage}sep_loss"]
-        cum_total_loss += loss_dict[f"{stage}total_loss"]
+        cum_rec_loss += loss_dict[f"recon_loss{stage}"]
+        cum_kl_loss += loss_dict[f"kl_loss{stage}"]
+        cum_ce_loss += loss_dict[f"ce_loss{stage}"]
+        cum_clst_loss += loss_dict[f"clst_loss{stage}"]
+        cum_sep_loss += loss_dict[f"sep_loss{stage}"]
+        cum_l1_loss += loss_dict[f"sep_loss{stage}"]
+        cum_total_loss += loss_dict[f"total_loss{stage}"]
 
     # get average loss
     avg_rec_loss = cum_rec_loss / num_items
