@@ -80,4 +80,5 @@ def save_plots(history, plots_dir, model_name, params_fname, batch_size, trainin
         os.remove(name)
     plt.savefig(name)
 
+    
     return plots_file_path
