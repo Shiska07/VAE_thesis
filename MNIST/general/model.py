@@ -1,7 +1,7 @@
 # VAE implementation from pytorch_lightning bolts is used in this source code:
 # https://github.com/Lightning-Universe/lightning-bolts/tree/master/pl_bolts/models/autoencoders
-import json
 import os
+import json
 from os.path import join
 
 import torch
@@ -10,9 +10,9 @@ import torchvision.utils as vutils
 from pytorch_lightning import LightningModule
 from torch import nn
 from torch.nn import functional as F
-
-from utils import create_dir
-from general.settings import prototype_shape, n_classes, encoder_out_channels
+from helpers import create_dir, get_average_losses
+from settings import class_specific, use_l1_mask, n_classes, encoder_out_channels,\
+   prototype_shape, num_prototypes, prototype_activation_function
 from vae_components import EncoderBlock, EncoderBottleneck,DecoderBlock
 
 
@@ -26,6 +26,7 @@ class PartProtoVAE(LightningModule):
         recon_coeff,
         clst_coeff,
         sep_coeff,
+        l1_coeff,
         lr = 1e-4,
         init_weights=True
 
@@ -37,24 +38,19 @@ class PartProtoVAE(LightningModule):
         self.save_hyperparameters()
 
         self.lr = lr
-        self.ksize = 3
         self.epsilon = 1e-4
-        self.n_classes = n_classes
 
         # coeffs for loss
         self.ce_coeff = ce_coeff
         self.kl_coeff = kl_coeff
         self.recon_coeff = recon_coeff
         self.clst_coeff = clst_coeff
-        self.sep_cpeff = sep_coeff
+        self.sep_coeff = sep_coeff
+        self.l1_coeff = l1_coeff
 
         self.input_height = input_height
         self.input_channels = input_channels
         self.latent_channels = prototype_shape[1]
-
-        # some params from ProtoPNet
-        self.class_specific = True
-        self.use_l1_mask = True
 
         # lists to store loses from each step
         # losses sores as tuple (rec_loss, kl_loss, total_loss)
@@ -75,28 +71,23 @@ class PartProtoVAE(LightningModule):
         Initialization of prototype class identity. Thi part is from PrototPNet Implementation.
         '''
 
-        self.prototype_shape = prototype_shape
-        self.num_prototypes = prototype_shape[0]
-        self.prototype_activation_function = 'log'
-
-
-        assert (self.num_prototypes % self.num_classes == 0)
+        assert (num_prototypes % n_classes == 0)
         # a onehot indication matrix for each prototype's class identity
-        self.prototype_class_identity = torch.zeros(self.num_prototypes,
-                                                    self.num_classes)
+        self.prototype_class_identity = torch.zeros(num_prototypes,
+                                                    n_classes)
 
-        num_prototypes_per_class = self.num_prototypes // self.num_classes
-        for j in range(self.num_prototypes):
+        num_prototypes_per_class = num_prototypes // n_classes
+        for j in range(num_prototypes):
             self.prototype_class_identity[j, j // num_prototypes_per_class] = 1
 
         # PROTOTYPE AND CLASSIFIER COMPONENTS
-        self.prototype_vectors = nn.Parameter(torch.rand(self.prototype_shape),
+        self.prototype_vectors = nn.Parameter(torch.rand(prototype_shape),
                                               requires_grad=True)
 
-        self.ones = nn.Parameter(torch.ones(self.prototype_shape),
+        self.ones = nn.Parameter(torch.ones(prototype_shape),
                                  requires_grad=False)
 
-        self.last_layer = nn.Linear(self.num_prototypes, self.n_classes,
+        self.last_layer = nn.Linear(num_prototypes, n_classes,
                                     bias=False)  # do not use bias
 
         # itntialize weights for the last layer
@@ -145,11 +136,11 @@ class PartProtoVAE(LightningModule):
         return distances
 
     def distance_2_similarity(self, distances):
-        if self.prototype_activation_function == 'log':
+        if prototype_activation_function == 'log':
             return torch.log((distances + 1) / (distances + self.epsilon))
-        elif self.prototype_activation_function == 'linear':
+        elif prototype_activation_function == 'linear':
             return -distances
-        return self.prototype_activation_function(distances)
+        return prototype_activation_function(distances)
 
     def sample(self, mu, log_var):
         std = torch.exp(log_var / 2)
@@ -176,7 +167,7 @@ class PartProtoVAE(LightningModule):
         # global min pooling because min distance corresponds to max similarity
         distances = self.prototype_distances(z)
         min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
-        min_distances = min_distances.view(-1, self.num_prototypes)
+        min_distances = min_distances.view(-1, num_prototypes)
         prototype_activations = self.distance_2_similarity(min_distances)
 
         # get prediction
@@ -198,7 +189,7 @@ class PartProtoVAE(LightningModule):
         # global min pooling because min distance corresponds to max similarity
         distances = self.prototype_distances(z)
         min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
-        min_distances = min_distances.view(-1, self.num_prototypes)
+        min_distances = min_distances.view(-1, num_prototypes)
         prototype_activations = self.distance_2_similarity(min_distances)
 
         # get prediction
@@ -222,14 +213,14 @@ class PartProtoVAE(LightningModule):
         cross_entropy = torch.nn.functional.cross_entropy(logits, y)
 
         # CLST and SEP Cost
-        if self.class_specific:
-            max_dist = (self.prototype_shape[1]
-                        * self.prototype_shape[2]
-                        * self.prototype_shape[3])
+        if class_specific:
+            max_dist = (prototype_shape[1]
+                        * prototype_shape[2]
+                        * prototype_shape[3])
 
             # prototypes_of_correct_class is a tensor of shape batch_size * num_prototypes
             # calculate cluster cost
-            prototypes_of_correct_class = torch.t(self.prototype_class_identity[:, y]).cuda()
+            prototypes_of_correct_class = torch.t(self.prototype_class_identity[:, y])
             inverted_distances, _ = torch.max((max_dist - min_distances) * prototypes_of_correct_class, dim=1)
             cluster_cost = torch.mean(max_dist - inverted_distances)
 
@@ -245,8 +236,8 @@ class PartProtoVAE(LightningModule):
                                                                                         dim=1)
             avg_separation_cost = torch.mean(avg_separation_cost)
 
-            if self.use_l1_mask:
-                l1_mask = 1 - torch.t(self.prototype_class_identity).cuda()
+            if use_l1_mask:
+                l1_mask = 1 - torch.t(self.prototype_class_identity)
                 l1 = (self.last_layer.weight * l1_mask).norm(p=1)
             else:
                 l1 = self.last_layer.weight.norm(p=1)
@@ -257,13 +248,13 @@ class PartProtoVAE(LightningModule):
             l1 = self.last_layer.weight.norm(p=1)
 
         # TOTOAL LOSS
-        if self.class_specific:
+        if class_specific:
             loss = (self.kl_coeff * kl
                     + self.recon_coeff * recon_loss
                     + self.ce_coeff * cross_entropy
                     + self.clst_coeff + cluster_cost
                     + self.sep_coeff * separation_cost
-                    + 1e-4 * l1)
+                    + self.l1_coeff * l1)
 
             logs = {
                 "recon_loss": recon_loss,
@@ -275,12 +266,12 @@ class PartProtoVAE(LightningModule):
                 "total_loss": loss,
             }
 
-        else: # excluse separation cost if not class specific
+        else: # exclude separation cost if not class specific
             loss = (self.kl_coeff * kl
                 + self.recon_coeff * recon_loss
                 + self.ce_coeff * cross_entropy
                 + self.clst_coeff + cluster_cost
-                + 1e-4 * l1)
+                + self.l1_coeff * l1)
 
             logs = {
                 "recon_loss": recon_loss,
@@ -299,8 +290,6 @@ class PartProtoVAE(LightningModule):
     def training_step(self, batch, batch_idx):
 
         loss, logs , _ = self.step(batch, batch_idx)
-
-        # modify train logs
         tr_logs = dict()
         for key, val in logs.items():
             new_key = "train_"+str(key)
@@ -315,7 +304,6 @@ class PartProtoVAE(LightningModule):
     def validation_step(self, batch, batch_idx):
 
         loss, logs, x_hat = self.step(batch, batch_idx)
-
         val_logs = dict()
         for key, val in logs.items():
             new_key = "val_"+str(key)
@@ -332,7 +320,6 @@ class PartProtoVAE(LightningModule):
     def test_step(self, batch, batch_idx):
 
         loss, logs, x_hat = self.step(batch, batch_idx)
-
         test_logs = dict()
         for key, val in logs.items():
             new_key = "test_" + str(key)
@@ -346,39 +333,6 @@ class PartProtoVAE(LightningModule):
 
         return loss
 
-    def get_cumulative_losses(self, losses_list):
-
-        num_items = len(losses_list)
-
-        cum_rec_loss = 0
-        cum_kl_loss = 0
-        cum_ce_loss = 0
-        cum_clst_loss = 0
-        cum_sep_loss = 0
-        cum_l1_loss = 0
-        cum_total_loss = 0
-
-        for loss_dict in losses_list:
-            cum_rec_loss += loss_dict["recon_loss"]
-            cum_kl_loss += loss_dict["kl_loss"]
-            cum_ce_loss += loss_dict["ce_loss"]
-            cum_clst_loss += loss_dict["clst_loss"]
-            cum_sep_loss += loss_dict["sep_loss"]
-            cum_l1_loss += loss_dict["sep_loss"]
-            cum_total_loss += loss_dict["total_loss"]
-
-
-        # get average loss
-        avg_rec_loss = cum_rec_loss / num_items
-        avg_kl_loss = cum_kl_loss / num_items
-        avg_ce_loss = cum_ce_loss / num_items
-        avg_clst_loss = cum_clst_loss / num_items
-        avg_sep_loss = cum_sep_loss / num_items
-        avg_l1_loss = cum_l1_loss / num_items
-        avg_total_loss = cum_total_loss / num_items
-
-        return avg_rec_loss, avg_kl_loss, avg_ce_loss, \
-        avg_clst_loss, avg_sep_loss, avg_l1_loss, avg_total_loss
 
     '''
     Here we would do the prototype projection depending on the epoch.
@@ -387,14 +341,15 @@ class PartProtoVAE(LightningModule):
 
         # calculate colulative losses per epoch
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
-            avg_l1_loss, avg_total_loss = self.get_cumulative_losses(self.training_step_losses)
+            avg_l1_loss, avg_total_loss = get_average_losses(
+            self.training_step_losses, "train_")
 
-        print(f"\nTraining Epoch[{self.current_epoch}]:\n \
+        print(f"\nTraining Epoch[{self.current_epoch}]:\n\
                 rec_loss: {avg_rec_loss}\n\
                 kl_loss: {avg_kl_loss}\n\
                 ce_loss: {avg_ce_loss}\n\
                 clst_loss: {avg_clst_loss}\n\
-                sap_loss: {avg_sep_loss}\n\
+                sep_loss: {avg_sep_loss}\n\
                 l1_loss: {avg_l1_loss}\n\
                 total_loss: {avg_total_loss}\n")
 
@@ -404,20 +359,24 @@ class PartProtoVAE(LightningModule):
     def on_validation_epoch_end(self):
         # calculate colulative losses per epoch
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
-            avg_l1_loss, avg_total_loss = self.get_cumulative_losses(
-            self.validation_step_losses)
+            avg_l1_loss, avg_total_loss = get_average_losses(
+            self.validation_step_losses, "val_")
 
-        print(f"\nValidation Epoch[{self.current_epoch}]:\n \
-                        rec_loss: {avg_rec_loss}\n\
-                        kl_loss: {avg_kl_loss}\n\
-                        ce_loss: {avg_ce_loss}\n\
-                        clst_loss: {avg_clst_loss}\n\
-                        sap_loss: {avg_sep_loss}\n\
-                        l1_loss: {avg_l1_loss}\n\
-                        total_loss: {avg_total_loss}\n")
+        print(f"\nValidation Epoch[{self.current_epoch}]:\n\
+                rec_loss: {avg_rec_loss}\n\
+                kl_loss: {avg_kl_loss}\n\
+                ce_loss: {avg_ce_loss}\n\
+                clst_loss: {avg_clst_loss}\n\
+                sep_loss: {avg_sep_loss}\n\
+                l1_loss: {avg_l1_loss}\n\
+                total_loss: {avg_total_loss}\n")
 
         self.validation_step_losses.clear()
 
+        # log this for early stopping
+        self.log("val_loss", avg_total_loss)
+
+        # to save reconstructed images
         if self.global_rank == 0:
             val_dir = join(self.logger.save_dir, self.logger.name, f"version_{self.logger.version}", "validation_results")
             create_dir(val_dir)
@@ -438,17 +397,17 @@ class PartProtoVAE(LightningModule):
 
     def on_test_epoch_end(self):
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
-            avg_l1_loss, avg_total_loss = self.get_cumulative_losses(
-            self.test_step_losses)
+            avg_l1_loss, avg_total_loss = get_average_losses(
+            self.test_step_losses, "test_")
 
-        print(f"\nTest Epoch[{self.current_epoch}]:\n \
-                               rec_loss: {avg_rec_loss}\n\
-                               kl_loss: {avg_kl_loss}\n\
-                               ce_loss: {avg_ce_loss}\n\
-                               clst_loss: {avg_clst_loss}\n\
-                               sap_loss: {avg_sep_loss}\n\
-                               l1_loss: {avg_l1_loss}\n\
-                               total_loss: {avg_total_loss}\n")
+        print(f"\nTest Epoch[{self.current_epoch}]:\n\
+               rec_loss: {avg_rec_loss}\n\
+               kl_loss: {avg_kl_loss}\n\
+               ce_loss: {avg_ce_loss}\n\
+               clst_loss: {avg_clst_loss}\n\
+               sep_loss: {avg_sep_loss}\n\
+               l1_loss: {avg_l1_loss}\n\
+               total_loss: {avg_total_loss}\n")
 
         self.test_step_losses.clear()
 
@@ -468,11 +427,12 @@ class PartProtoVAE(LightningModule):
             vutils.save_image(x_hat, join(test_dir, f"test_recons_{self.logger.name}_{self.current_epoch}.png"), normalize=False, nrow=8)
             self.logger.experiment.add_image(f"test_recons_{self.logger.name}_{self.current_epoch}", grid, self.global_step)
 
+
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def get_history(self):
-        return self.train_history, self.val_history
+        pass
 
     def save_test_loss_data(self, path):
         save_path = os.path.join(path, 'test_loss.json')

@@ -6,6 +6,39 @@ from os.path import exists
 import matplotlib.pyplot as plt
 
 
+# calulates the average losses for each epoch
+def get_average_losses(losses_list, stage):
+    num_items = len(losses_list)
+
+    cum_rec_loss = 0
+    cum_kl_loss = 0
+    cum_ce_loss = 0
+    cum_clst_loss = 0
+    cum_sep_loss = 0
+    cum_l1_loss = 0
+    cum_total_loss = 0
+
+    for loss_dict in losses_list:
+        cum_rec_loss += loss_dict[f"{stage}recon_loss"]
+        cum_kl_loss += loss_dict[f"{stage}kl_loss"]
+        cum_ce_loss += loss_dict[f"{stage}ce_loss"]
+        cum_clst_loss += loss_dict[f"{stage}clst_loss"]
+        cum_sep_loss += loss_dict[f"{stage}sep_loss"]
+        cum_l1_loss += loss_dict[f"{stage}sep_loss"]
+        cum_total_loss += loss_dict[f"{stage}total_loss"]
+
+    # get average loss
+    avg_rec_loss = cum_rec_loss / num_items
+    avg_kl_loss = cum_kl_loss / num_items
+    avg_ce_loss = cum_ce_loss / num_items
+    avg_clst_loss = cum_clst_loss / num_items
+    avg_sep_loss = cum_sep_loss / num_items
+    avg_l1_loss = cum_l1_loss / num_items
+    avg_total_loss = cum_total_loss / num_items
+
+    return avg_rec_loss, avg_kl_loss, avg_ce_loss, \
+        avg_clst_loss, avg_sep_loss, avg_l1_loss, avg_total_loss
+
 def create_dir(directory, verbose=False):
     if not exists(directory):
         makedirs(directory)

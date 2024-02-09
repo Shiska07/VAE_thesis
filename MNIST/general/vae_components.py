@@ -1,6 +1,6 @@
 import torch
-from torch import nn
 import torchsummary
+from torch import nn
 from torch.nn import functional as F
 
 class EncoderBlock(nn.Module):
@@ -66,12 +66,12 @@ class DecoderBlock(nn.Module):
         return x
 
 
-if __name__ == '__main__':
-    encoder = EncoderBlock()
-    print(encoder)
-    print(torchsummary.summary(encoder, (1, 28, 28)))
-
-    decoder = DecoderBlock()
-    print(decoder)
-    print(torchsummary.summary(decoder, (10, 2, 2)))
+# if __name__ == '__main__':
+#     encoder = EncoderBlock()
+#     print(encoder)
+#     print(torchsummary.summary(encoder, (1, 28, 28)))
+#
+#     decoder = DecoderBlock()
+#     print(decoder)
+#     print(torchsummary.summary(decoder, (10, 2, 2)))
 
