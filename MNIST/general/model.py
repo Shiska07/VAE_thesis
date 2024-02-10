@@ -1,6 +1,7 @@
 # VAE implementation from pytorch_lightning bolts is used in this source code:
 # https://github.com/Lightning-Universe/lightning-bolts/tree/master/pl_bolts/models/autoencoders
 import os
+import pdb
 import json
 from os.path import join
 
@@ -145,7 +146,7 @@ class PartProtoVAE(LightningModule):
         std = torch.exp(log_var / 2)
         p = torch.distributions.Normal(torch.zeros_like(mu), torch.ones_like(std))
         q = torch.distributions.Normal(mu, std)
-        z = q.rsample()
+        z = F.sigmoid(q.rsample())
         return p, q, z
 
     '''
@@ -163,7 +164,17 @@ class PartProtoVAE(LightningModule):
         '''
         ProtoPNet
         '''
-        # global min pooling because min distance corresponds to max similarity
+        '''
+        We have L2 distance and wish to extract the patch woth the lowest 
+        distance. [2, 3, 10, 6]
+        1. -distance: makes sure that patch with lowest distance becomes the 
+        highest value [-2, -3, -10, -6]
+        2. maxpooling from these vaule extracts the number with the lowest 
+        distance but negated [-2]
+        3. negating this gives the original value: 2
+        4. Then this is converted to similarity by negating again since lower 
+        distance values should correspond to higher similarity
+        '''
         distances = self.prototype_distances(z)
         min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
         min_distances = min_distances.view(-1, num_prototypes)
@@ -200,6 +211,7 @@ class PartProtoVAE(LightningModule):
         x, y = batch
         p, q, z, x_hat, logits, min_distances = self._run_step(x)
 
+        pdb.set_trace()
         # recon_loss = F.binary_cross_entropy(x_hat, x, reduction="mean")
         recon_loss = F.mse_loss(x_hat, x, reduction="mean")
 
@@ -213,26 +225,61 @@ class PartProtoVAE(LightningModule):
 
         # CLST and SEP Cost
         if class_specific:
+
+            '''
+            CLUSTER COST
+            '''
             max_dist = (prototype_shape[1]
                         * prototype_shape[2]
                         * prototype_shape[3])
 
-            # prototypes_of_correct_class is a tensor of shape batch_size * num_prototypes
+            '''
+            prototypes_of_correct_class is a tensor of shape batch_size * \
+                                                              num_prototypes
+            for each training example, it represents the 1 x m vector with 0's and 1's
+            where 1's indicate the correct prototypes for the training example 
+            according to the class it belongs to
+            '''
             # calculate cluster cost
             prototypes_of_correct_class = torch.t(self.prototype_class_identity[:, y])
-            inverted_distances, _ = torch.max((max_dist - min_distances) * prototypes_of_correct_class, dim=1)
-            cluster_cost = torch.mean(max_dist - inverted_distances)
 
-            # calculate separation cost
+            '''
+            1. The step below calculates the inverted distance of each training 
+            example with the prototype of its class.
+            '''
+            # subtract with max distance such that higher values represent closer
+            # datapoints
+            similarity_vals = max_dist - min_distances
+            similarity_vals_with_corr_prototypes = \
+                similarity_vals * prototypes_of_correct_class
+
+            # maximum with dim=1 i.e. columns to find one prototype that the
+            # training example is closest to
+            inverted_distances, _ = torch.max(similarity_vals_with_corr_prototypes,
+                                              dim=1)
+
+            # now that we have the similarity or inverted distance with the
+            # closest prototype, we convert it again to distance
+            distances_to_closest_correct_prototype = max_dist - inverted_distances
+            cluster_cost = torch.mean(distances_to_closest_correct_prototype)
+
+            '''
+            SEPARATION COST
+            '''
             prototypes_of_wrong_class = 1 - prototypes_of_correct_class
-            inverted_distances_to_nontarget_prototypes, _ = \
-                torch.max((max_dist - min_distances) * prototypes_of_wrong_class, dim=1)
-            separation_cost = torch.mean(max_dist - inverted_distances_to_nontarget_prototypes)
+            similarity_vals_with_incor_prototypes = similarity_vals * prototypes_of_wrong_class
+
+            # find the 1 prototype from a wrong class with the highest similarity/
+            # inverted distance
+            inverted_distances, _ = torch.max(
+                similarity_vals_with_incor_prototypes, dim=1)
+            distances_to_closest_incor_prototype = max_dist - inverted_distances
+            separation_cost = torch.mean(distances_to_closest_incor_prototype)
 
             # calculate avg cluster cost
             avg_separation_cost = \
-                torch.sum(min_distances * prototypes_of_wrong_class, dim=1) / torch.sum(prototypes_of_wrong_class,
-                                                                                        dim=1)
+                torch.sum(min_distances * prototypes_of_wrong_class, dim=1) / \
+                torch.sum(prototypes_of_wrong_class, dim=1)
             avg_separation_cost = torch.mean(avg_separation_cost)
 
             if use_l1_mask:
@@ -241,13 +288,8 @@ class PartProtoVAE(LightningModule):
             else:
                 l1 = self.last_layer.weight.norm(p=1)
 
-        else:
-            min_distance, _ = torch.min(min_distances, dim=1)
-            cluster_cost = torch.mean(min_distance)
-            l1 = self.last_layer.weight.norm(p=1)
 
-        # TOTAL LOSS
-        if class_specific:
+            # DEFINE LOSS TERM
             loss = (self.kl_coeff * kl
                     + self.recon_coeff * recon_loss
                     + self.ce_coeff * cross_entropy
@@ -265,12 +307,24 @@ class PartProtoVAE(LightningModule):
                 "total_loss": loss,
             }
 
-        else: # exclude separation cost if not class specific
+
+        else:
+            '''
+            If we don't care about class specificity, find the closest prototype 
+            to each training example (min_distance, _ = torch.min(min_distances, 
+            dim=1)) and take the mean to calculate cluster cost. Do not calculate 
+            separation cost.
+            '''
+            min_distance, _ = torch.min(min_distances, dim=1)
+            cluster_cost = torch.mean(min_distance)
+            l1 = self.last_layer.weight.norm(p=1)
+
+            # DEFINE LOSS TERM
             loss = (self.kl_coeff * kl
-                + self.recon_coeff * recon_loss
-                + self.ce_coeff * cross_entropy
-                + self.clst_coeff + cluster_cost
-                + self.l1_coeff * l1)
+                    + self.recon_coeff * recon_loss
+                    + self.ce_coeff * cross_entropy
+                    + self.clst_coeff + cluster_cost
+                    + self.l1_coeff * l1)
 
             logs = {
                 "recon_loss": recon_loss,
