@@ -10,7 +10,7 @@ from torch import nn
 import torchvision.utils as vutils
 from torch.nn import functional as F
 from pytorch_lightning import LightningModule
-from helpers import create_dir, get_average_losses
+from helpers import create_dir, get_average_losses, get_accuracy
 from settings import class_specific, use_l1_mask, n_classes, encoder_out_channels,\
    prototype_shape, num_prototypes, prototype_activation_function
 from vae_components import EncoderBlock, EncoderBottleneck, DecoderBlock
@@ -223,6 +223,9 @@ class PartProtoVAE(LightningModule):
         # cross entropy loss
         cross_entropy = torch.nn.functional.cross_entropy(logits, y)
 
+        # calculate accuracy
+        acc = get_accuracy(logits, y)
+
         # CLST and SEP Cost
         if class_specific:
 
@@ -305,6 +308,7 @@ class PartProtoVAE(LightningModule):
                 "sep_loss": separation_cost,
                 "l1_loss": l1,
                 "total_loss": loss,
+                "acc": acc
             }
 
 
@@ -333,6 +337,8 @@ class PartProtoVAE(LightningModule):
                 "clst_loss": cluster_cost,
                 "l1_loss": l1,
                 "total_loss": loss,
+                "acc": acc
+
             }
 
         return loss, logs, x_hat
@@ -406,7 +412,7 @@ class PartProtoVAE(LightningModule):
 
         # calculate colulative losses per epoch
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
-            avg_l1_loss, avg_total_loss = get_average_losses(
+            avg_l1_loss, avg_total_loss, avg_acc = get_average_losses(
             self.training_step_losses, "/train")
 
         print(f"\nTraining Epoch[{self.current_epoch}]:\n\
@@ -416,7 +422,8 @@ class PartProtoVAE(LightningModule):
                 clst_loss: {avg_clst_loss}\n\
                 sep_loss: {avg_sep_loss}\n\
                 l1_loss: {avg_l1_loss}\n\
-                total_loss: {avg_total_loss}\n")
+                total_loss: {avg_total_loss}\n\
+                avg_accuracy: {avg_acc}\n")
 
         self.training_step_losses.clear()
 
@@ -424,7 +431,7 @@ class PartProtoVAE(LightningModule):
     def on_validation_epoch_end(self):
         # calculate colulative losses per epoch
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
-            avg_l1_loss, avg_total_loss = get_average_losses(
+            avg_l1_loss, avg_total_loss, avg_acc = get_average_losses(
             self.validation_step_losses, "/val")
 
         print(f"\nValidation Epoch[{self.current_epoch}]:\n\
@@ -434,7 +441,8 @@ class PartProtoVAE(LightningModule):
                 clst_loss: {avg_clst_loss}\n\
                 sep_loss: {avg_sep_loss}\n\
                 l1_loss: {avg_l1_loss}\n\
-                total_loss: {avg_total_loss}\n")
+                total_loss: {avg_total_loss}\n\
+                avg_accuracy: {avg_acc}\n")
 
         self.validation_step_losses.clear()
 
@@ -464,7 +472,7 @@ class PartProtoVAE(LightningModule):
 
     def on_test_epoch_end(self):
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
-            avg_l1_loss, avg_total_loss = get_average_losses(
+            avg_l1_loss, avg_total_loss, avg_acc = get_average_losses(
             self.test_step_losses, "/test")
 
         print(f"\nTest Epoch[{self.current_epoch}]:\n\
@@ -474,7 +482,8 @@ class PartProtoVAE(LightningModule):
                clst_loss: {avg_clst_loss}\n\
                sep_loss: {avg_sep_loss}\n\
                l1_loss: {avg_l1_loss}\n\
-               total_loss: {avg_total_loss}\n")
+               total_loss: {avg_total_loss}\n\
+               avg_accuracy: {avg_acc}\n")
 
         self.test_step_losses.clear()
 

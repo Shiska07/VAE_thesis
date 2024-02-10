@@ -1,5 +1,6 @@
 import os
 import json
+import torch
 import pandas as pd
 from os import makedirs
 from os.path import exists
@@ -17,6 +18,7 @@ def get_average_losses(losses_list, stage):
     cum_sep_loss = 0
     cum_l1_loss = 0
     cum_total_loss = 0
+    cum_total_acc = 0
 
     for loss_dict in losses_list:
         cum_rec_loss += loss_dict[f"recon_loss{stage}"]
@@ -26,6 +28,7 @@ def get_average_losses(losses_list, stage):
         cum_sep_loss += loss_dict[f"sep_loss{stage}"]
         cum_l1_loss += loss_dict[f"sep_loss{stage}"]
         cum_total_loss += loss_dict[f"total_loss{stage}"]
+        cum_total_acc += loss_dict[f"acc{stage}"]
 
     # get average loss
     avg_rec_loss = cum_rec_loss / num_items
@@ -35,9 +38,26 @@ def get_average_losses(losses_list, stage):
     avg_sep_loss = cum_sep_loss / num_items
     avg_l1_loss = cum_l1_loss / num_items
     avg_total_loss = cum_total_loss / num_items
+    avg_acc = cum_total_acc / num_items
 
     return avg_rec_loss, avg_kl_loss, avg_ce_loss, \
-        avg_clst_loss, avg_sep_loss, avg_l1_loss, avg_total_loss
+        avg_clst_loss, avg_sep_loss, avg_l1_loss, avg_total_loss, avg_acc
+
+
+def get_accuracy(logits, targets):
+
+    probabilities = torch.softmax(logits, dim=1)
+
+    # Get the predicted class labels
+    predicted_labels = torch.argmax(probabilities, dim=1)
+
+    # Calculate the accuracy
+    correct_predictions = (predicted_labels == targets).sum().item()
+    total_samples = targets.size(0)
+    accuracy = correct_predictions / total_samples
+
+    return accuracy
+
 
 def create_dir(directory, verbose=False):
     if not exists(directory):
