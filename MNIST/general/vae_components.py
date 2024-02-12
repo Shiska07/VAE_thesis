@@ -1,3 +1,5 @@
+import pdb
+
 import torch
 import torchsummary
 from torch import nn
@@ -7,7 +9,8 @@ class EncoderBlock(nn.Module):
     def __init__(self, input_channels, encoder_out_channels):
         super(EncoderBlock, self).__init__()
         self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1)
-        self.bn1 = nn.BatchNorm2d(32) #[14, 2, 3, 0.5]     [n_out, j_out, r_out, start_out]
+        self.bn1 = nn.BatchNorm2d(32) #[14, 2, 3, 0.5]     [n_out, j_out, r_out,
+        # start_out
 
         self.conv2 = nn.Conv2d(32, 32, kernel_size=3, stride=2, padding=1)
         self.bn2 = nn.BatchNorm2d(32) #[7, 4, 7, 0.5]
@@ -15,8 +18,14 @@ class EncoderBlock(nn.Module):
         self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
         self.bn3 = nn.BatchNorm2d(64) #[4, 8, 15, 0.5]
 
-        self.conv4 = nn.Conv2d(64, encoder_out_channels, kernel_size=3, stride=2, padding=1)
+        self.conv4 = nn.Conv2d(64, 32, kernel_size=3, stride=2, padding=1)
         self.bn4 = nn.BatchNorm2d(encoder_out_channels) #[2, 32, 31, 0.5]
+
+        self.conv5 = nn.Conv2d(32, encoder_out_channels, kernel_size=1,
+                               stride=1, padding="valid")
+
+        # kernel_size, stride and paddinf for each layer
+        self.conv_feat = ([3, 3, 3, 3, 1], [2, 2, 2, 2, 1], [1, 1, 1, 1, 0])
 
 
     def forward(self, x):
@@ -24,19 +33,11 @@ class EncoderBlock(nn.Module):
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
         x = F.relu(self.bn4(self.conv4(x)))
+        x = F.sigmoid(self.conv5(x))
         return x
 
-
-class EncoderBottleneck(nn.Module):
-    def __init__(self, encoder_out_channels, latent_channels):
-        super(EncoderBottleneck, self).__init__()
-        self.conv_mu = nn.Conv2d(encoder_out_channels, latent_channels, kernel_size=1, stride=1, padding="valid")
-        self.conv_logvar = nn.Conv2d(encoder_out_channels, latent_channels, kernel_size=1, stride=1, padding="valid")
-
-    def forward(self, x):
-        mu = self.conv_mu(x) #[16, 2, 2]
-        logvar = self.conv_logvar(x)    #[16, 2, 2]
-        return mu, logvar
+    def conv_info(self):
+        return self.conv_feat
 
 
 class DecoderBlock(nn.Module):
@@ -66,12 +67,13 @@ class DecoderBlock(nn.Module):
         return x
 
 
-# if __name__ == '__main__':
-#     encoder = EncoderBlock()
-#     print(encoder)
-#     print(torchsummary.summary(encoder, (1, 28, 28)))
-#
-#     decoder = DecoderBlock()
-#     print(decoder)
-#     print(torchsummary.summary(decoder, (10, 2, 2)))
+if __name__ == '__main__':
+    encoder = EncoderBlock(1, 32)
+    pdb.set_trace()
+    print(encoder)
+    print(torchsummary.summary(encoder, (1, 28, 28)))
+
+    decoder = DecoderBlock(32, 16, 1)
+    print(decoder)
+    print(torchsummary.summary(decoder, (10, 2, 2)))
 

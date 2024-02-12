@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import time
@@ -5,15 +6,21 @@ import time
 import numpy as np
 import torch
 import helpers
+import receptive_field
 import pytorch_lightning as pl
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from settings import class_specific, use_l1_mask, n_classes, encoder_out_channels, \
+from settings import img_size, class_specific, use_l1_mask, n_classes, \
+    encoder_out_channels, \
     prototype_shape, num_prototypes, prototype_activation_function, push_start, \
     push_epochs_interval, weight_matrix_filename, prototype_img_filename_prefix, \
     proto_bound_boxes_filename_prefix, prototype_self_act_filename_prefix, \
     save_prototype_class_identity
+
+'''
+Some components of the following implementation were obtained from: https://github.com/cfchen-duke/ProtoPNet
+ '''
 
 early_stopping_callback = EarlyStopping(
                 monitor='avg_total_val_loss',
@@ -57,66 +64,6 @@ class PrototypeProjectionCallback(pl.Callback):
         self.proto_bound_boxes = None
         self.proto_epoch_dir = None
 
-    @ staticmethod
-    def compute_rf_protoL_at_spatial_location(self, img_size, height_index,
-                                              width_index,
-                                              protoL_rf_info):
-        n = protoL_rf_info[0]
-        j = protoL_rf_info[1]
-        r = protoL_rf_info[2]
-        start = protoL_rf_info[3]
-        assert (height_index < n)
-        assert (width_index < n)
-
-        center_h = start + (height_index * j)
-        center_w = start + (width_index * j)
-
-        rf_start_height_index = max(int(center_h - (r / 2)), 0)
-        rf_end_height_index = min(int(center_h + (r / 2)), img_size)
-
-        rf_start_width_index = max(int(center_w - (r / 2)), 0)
-        rf_end_width_index = min(int(center_w + (r / 2)), img_size)
-
-        return [rf_start_height_index, rf_end_height_index,
-                rf_start_width_index, rf_end_width_index]
-
-    @staticmethod
-    def compute_rf_prototype(self, img_size, prototype_patch_index, protoL_rf_info):
-        img_index = prototype_patch_index[0]
-        height_index = prototype_patch_index[1]
-        width_index = prototype_patch_index[2]
-        rf_indices = self.compute_rf_protoL_at_spatial_location(img_size,
-                                                           height_index,
-                                                           width_index,
-                                                           protoL_rf_info)
-        return [img_index, rf_indices[0], rf_indices[1],
-                rf_indices[2], rf_indices[3]]
-
-    @staticmethod
-    def find_high_activation_crop(self, activation_map, percentile=95):
-        threshold = np.percentile(activation_map, percentile)
-        mask = np.ones(activation_map.shape)
-        mask[activation_map < threshold] = 0
-        lower_y, upper_y, lower_x, upper_x = 0, 0, 0, 0
-        for i in range(mask.shape[0]):
-            if np.amax(mask[i]) > 0.5:
-                lower_y = i
-                break
-        for i in reversed(range(mask.shape[0])):
-            if np.amax(mask[i]) > 0.5:
-                upper_y = i
-                break
-        for j in range(mask.shape[1]):
-            if np.amax(mask[:, j]) > 0.5:
-                lower_x = j
-                break
-        for j in reversed(range(mask.shape[1])):
-            if np.amax(mask[:, j]) > 0.5:
-                upper_x = j
-                break
-        return lower_y, upper_y + 1, lower_x, upper_x + 1
-
-
     def on_train_epoch_end(self, trainer, pl_module):
         # calculate colulative losses per epoch
         avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
@@ -145,15 +92,32 @@ class PrototypeProjectionCallback(pl.Callback):
 
             prototype_shape = pl_module.prototype_shape
             n_prototypes = pl_module.num_prototypes
-            # saves the closest distance seen so far, initialized with infinity for each
-            # prototype
+
+            '''
+            saves the closest distance seen so far to track if the closest 
+            prototype has been found, initialized with infinity for each prototype
+            '''
             self.global_min_proto_dist = np.full(n_prototypes, np.inf)
-            # saves the patch representation that gives the current smallest distance
+
+            '''
+            saves the latent space patch representation of training data that gives 
+            the current smallest distance
+            '''
             self.global_min_fmap_patches = np.zeros(
                 [n_prototypes,
                  prototype_shape[1],
                  prototype_shape[2],
                  prototype_shape[3]])
+
+            '''
+             proto_rf_boxes and proto_bound_boxes column:
+             0: image index in the entire dataset
+             1: height start index
+             2: height end index
+             3: width start index
+             4: width end index
+             5: (optional) class identity
+             '''
 
             if save_prototype_class_identity:
                 self.proto_rf_boxes = np.full(shape=[n_prototypes, 6],
@@ -170,6 +134,9 @@ class PrototypeProjectionCallback(pl.Callback):
 
             self.search_batch_size = self.dataloader.batch_size
 
+            '''
+            DO THIS FOR EACH BATCH
+            '''
             for push_iter, (search_batch_input, search_y) in enumerate(
                     self.dataloader):
                 '''
@@ -186,10 +153,13 @@ class PrototypeProjectionCallback(pl.Callback):
 
             if self.proto_epoch_dir is not None and proto_bound_boxes_filename_prefix \
                     is not None:
+                # save data corresponding to the receptive field
                 np.save(os.path.join(self.proto_epoch_dir,
                                      proto_bound_boxes_filename_prefix + '-receptive_field' + str(
                                          pl_module.current_epoch) + '.npy'),
                         self.proto_rf_boxes)
+
+                # save data corresponding to the bounding boxes
                 np.save(os.path.join(self.proto_epoch_dir,
                                      proto_bound_boxes_filename_prefix + str(
                                          pl_module.current_epoch) + '.npy'),
@@ -214,6 +184,7 @@ class PrototypeProjectionCallback(pl.Callback):
                                    preprocess_input_function=None,
                                    prototype_layer_stride=1):
 
+        # preprocess batch if necessary
         if preprocess_input_function is not None:
             # print('preprocessing input for pushing ...')
             # search_batch = copy.deepcopy(search_batch_input)
@@ -222,14 +193,15 @@ class PrototypeProjectionCallback(pl.Callback):
         else:
             search_batch = search_batch_input
 
-        with torch.no_grad():
-            search_batch = search_batch.cuda()
-            # this computation currently is not parallelized
-            protoL_input_torch, proto_dist_torch = pl_module.push_forward(
-                search_batch)
+        '''
+        Compute forward upto the bottleneck to get latent space representation 
+        and results from _l2_convolution
+        '''
+        protoL_input_torch, proto_dist_torch = pl_module.push_forward(
+            search_batch)
 
-        protoL_input_ = np.copy(protoL_input_torch.detach().cpu().numpy())
-        proto_dist_ = np.copy(proto_dist_torch.detach().cpu().numpy())
+        protoL_input_ = np.copy(protoL_input_torch.numpy())
+        proto_dist_ = np.copy(proto_dist_torch.numpy())
 
         del protoL_input_torch, proto_dist_torch
 
@@ -298,8 +270,15 @@ class PrototypeProjectionCallback(pl.Callback):
 
                 # get the receptive field boundary of the image patch
                 # that generates the representation
-                protoL_rf_info = pl_module.proto_layer_rf_info
-                rf_prototype_j = self.compute_rf_prototype(search_batch.size(2),
+                layer_filter_sizes, layer_strides, layer_paddings = \
+                    pl_module.encoder.conv_info()
+                protoL_rf_info = receptive_field.compute_proto_layer_rf_info_v2(img_size,
+                                                         layer_filter_sizes=layer_filter_sizes,
+                                                         layer_strides=layer_strides,
+                                                         layer_paddings=layer_paddings,
+                                                         prototype_kernel_size=prototype_shape[2])
+
+                rf_prototype_j = receptive_field.compute_rf_prototype(search_batch.size(2),
                                                       batch_argmin_proto_dist_j,
                                                       protoL_rf_info)
 
@@ -336,7 +315,8 @@ class PrototypeProjectionCallback(pl.Callback):
                 upsampled_act_img_j = cv2.resize(proto_act_img_j, dsize=(
                 original_img_size, original_img_size),
                                                  interpolation=cv2.INTER_CUBIC)
-                proto_bound_j = self.find_high_activation_crop(upsampled_act_img_j)
+                proto_bound_j = receptive_field.find_high_activation_crop(
+                    upsampled_act_img_j)
                 # crop out the image patch with high activation as prototype image
                 proto_img_j = original_img_j[proto_bound_j[0]:proto_bound_j[1],
                               proto_bound_j[2]:proto_bound_j[3], :]
@@ -411,3 +391,4 @@ class PrototypeProjectionCallback(pl.Callback):
 
         if class_specific:
             del class_to_img_index_dict
+

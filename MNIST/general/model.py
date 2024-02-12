@@ -15,9 +15,12 @@ from settings import class_specific, use_l1_mask, n_classes, encoder_out_channel
     prototype_shape, num_prototypes, prototype_activation_function, push_start, \
     push_epochs_interval, weight_matrix_filename, prototype_img_filename_prefix, \
     proto_bound_boxes_filename_prefix, prototype_self_act_filename_prefix
-from vae_components import EncoderBlock, EncoderBottleneck, DecoderBlock
+from vae_components import EncoderBlock, DecoderBlock
 
 
+'''
+Some components of the following implementation were obtained from: https://github.com/cfchen-duke/ProtoPNet
+ '''
 class PartProtoVAE(LightningModule):
     def __init__(
         self,
@@ -151,21 +154,25 @@ class PartProtoVAE(LightningModule):
         z = F.sigmoid(q.rsample())
         return p, q, z
 
+    def push_forward(self, x):
+        encoder_out = self.encoder(x)
+        mu = encoder_out[:,:self.latent_channels,:,:]
+        logvar = encoder_out[:,self.latent_channels:,:,:]
+        p, q, z = self.sample(mu, logvar)
+        distances = self.prototype_distances(z)
+
+        return p, q, z, distances
+
     '''
     The forward method is for running data through your model during testing and usage.
     In this case we want the output logit, reconstruction(we may not need this later) and the min distances. 
     '''
     def forward(self, x):
-        encoder_out = self.encoder(x)
-        mu, logvar = self.bottleneck(encoder_out)
-        p, q, z = self.sample(mu, logvar)
+        p, q, z, distances = self.push_forward(x)
 
         # get reconstruction
         x_hat = self.decoder(z)
 
-        '''
-        ProtoPNet
-        '''
         '''
         We have L2 distance and wish to extract the patch woth the lowest 
         distance. [2, 3, 10, 6]
@@ -189,15 +196,14 @@ class PartProtoVAE(LightningModule):
 
     def _run_step(self, x):
         encoder_out = self.encoder(x)
-        mu, logvar = self.bottleneck(encoder_out)
+        mu = encoder_out[:, :self.latent_channels, :, :]
+        logvar = encoder_out[:, self.latent_channels:, :, :]
         p, q, z = self.sample(mu, logvar)
 
         # get reconstruction
         x_hat = self.decoder(z)
 
-        '''
-        ProtoPNet
-        '''
+
         # global min pooling because min distance corresponds to max similarity
         distances = self.prototype_distances(z)
         min_distances = -F.max_pool2d(-distances, kernel_size=(distances.size()[2], distances.size()[3]))
@@ -406,33 +412,6 @@ class PartProtoVAE(LightningModule):
             self.test_outs = batch
 
         return loss
-
-
-    def on_train_epoch_end(self):
-
-        # calculate colulative losses per epoch
-        avg_rec_loss, avg_kl_loss, avg_ce_loss, avg_clst_loss, avg_sep_loss, \
-            avg_l1_loss, avg_total_loss, avg_acc = get_average_losses(
-            self.training_step_losses, "/train")
-
-        print(f"\nTraining Epoch[{self.current_epoch}]:\n\
-                rec_loss: {avg_rec_loss}\n\
-                kl_loss: {avg_kl_loss}\n\
-                ce_loss: {avg_ce_loss}\n\
-                clst_loss: {avg_clst_loss}\n\
-                sep_loss: {avg_sep_loss}\n\
-                l1_loss: {avg_l1_loss}\n\
-                total_loss: {avg_total_loss}\n\
-                avg_accuracy: {avg_acc}\n")
-
-        self.training_step_losses.clear()
-
-        if self.prototype_saving_dir is not None:
-            if self.current_epoch > push_start and self.current_epoch % \
-                    push_epochs_interval == 0:
-                    create_dir(os.path.join(self.prototype_saving_dir, f'epoch'
-                                                                       f'{self.current_epoch}'))
-
 
 
 
