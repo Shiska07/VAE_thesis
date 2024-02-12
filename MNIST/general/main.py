@@ -8,7 +8,7 @@ from datamodule import MNISTDataModule
 from settings import img_size, val_ratio
 from helpers import load_parameters, create_dir, save_plots
 from custom_callbacks import early_stopping_callback, getmodel_ckpt_callback, \
-    clear_prev_logs
+    clear_prev_logs, PrototypeProjectionCallback
 
 def save_entire_model(model, model_dest):
     # save the entire model
@@ -60,7 +60,8 @@ def main_func(params_dir_path):
                 accelerator=params['accelerator'],
                 max_epochs=params['max_epochs'],
                 strategy=params['strategy'],
-                callbacks=[early_stopping_callback, checkpoint_callback],
+                callbacks=[early_stopping_callback, checkpoint_callback,
+                           PrototypeProjectionCallback()],
                 enable_progress_bar=True,
                 check_val_every_n_epoch=1,
                 enable_checkpointing=True,

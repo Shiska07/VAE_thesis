@@ -11,8 +11,10 @@ import torchvision.utils as vutils
 from torch.nn import functional as F
 from pytorch_lightning import LightningModule
 from helpers import create_dir, get_average_losses, get_accuracy
-from settings import class_specific, use_l1_mask, n_classes, encoder_out_channels,\
-   prototype_shape, num_prototypes, prototype_activation_function
+from settings import class_specific, use_l1_mask, n_classes, encoder_out_channels, \
+    prototype_shape, num_prototypes, prototype_activation_function, push_start, \
+    push_epochs_interval, weight_matrix_filename, prototype_img_filename_prefix, \
+    proto_bound_boxes_filename_prefix, prototype_self_act_filename_prefix
 from vae_components import EncoderBlock, EncoderBottleneck, DecoderBlock
 
 
@@ -211,7 +213,7 @@ class PartProtoVAE(LightningModule):
         x, y = batch
         p, q, z, x_hat, logits, min_distances = self._run_step(x)
 
-        pdb.set_trace()
+        # pdb.set_trace()
         # recon_loss = F.binary_cross_entropy(x_hat, x, reduction="mean")
         recon_loss = F.mse_loss(x_hat, x, reduction="mean")
 
@@ -405,9 +407,7 @@ class PartProtoVAE(LightningModule):
 
         return loss
 
-    '''
-    Here we would do the prototype projection depending on the epoch.
-    '''
+
     def on_train_epoch_end(self):
 
         # calculate colulative losses per epoch
@@ -426,6 +426,14 @@ class PartProtoVAE(LightningModule):
                 avg_accuracy: {avg_acc}\n")
 
         self.training_step_losses.clear()
+
+        if self.prototype_saving_dir is not None:
+            if self.current_epoch > push_start and self.current_epoch % \
+                    push_epochs_interval == 0:
+                    create_dir(os.path.join(self.prototype_saving_dir, f'epoch'
+                                                                       f'{self.current_epoch}'))
+
+
 
 
     def on_validation_epoch_end(self):
