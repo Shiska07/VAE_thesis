@@ -29,6 +29,9 @@ def find_high_activation_crop(activation_map, percentile=95):
     return lower_y, upper_y+1, lower_x, upper_x+1
 
 
+'''
+This function computes the receptive field for a single layer.
+'''
 def compute_layer_rf_info(layer_filter_size, layer_stride, layer_padding,
                           previous_layer_rf_info):
     n_in = previous_layer_rf_info[0] # input size
@@ -61,6 +64,14 @@ def compute_layer_rf_info(layer_filter_size, layer_stride, layer_padding,
     start_out = start_in + ((layer_filter_size - 1)/2 - pL)*j_in
     return [n_out, j_out, r_out, start_out]
 
+
+'''
+This function takes image size, receptive field info at the prototype layer, 
+and height and width(spatial) indices of the closest feature map patch.
+
+Fot those spatial indices, It computes the corresponding indices in the original 
+image size for cropping the image.
+'''
 def compute_rf_protoL_at_spatial_location(img_size, height_index, width_index, protoL_rf_info):
     n = protoL_rf_info[0]
     j = protoL_rf_info[1]
@@ -81,6 +92,14 @@ def compute_rf_protoL_at_spatial_location(img_size, height_index, width_index, p
     return [rf_start_height_index, rf_end_height_index,
             rf_start_width_index, rf_end_width_index]
 
+'''
+This function takes image size, index of the closest feature map patch
+and the receptive field of the network at the prototype layer.
+It computes the corresponding spatial indices covered by the
+prototype in the original image size.
+THIS FUNCTION COULD BE EXTREMELY HELPFUL in adjusting receptive field of the 
+prototypes if necessary.
+'''
 def compute_rf_prototype(img_size, prototype_patch_index, protoL_rf_info):
     img_index = prototype_patch_index[0]
     height_index = prototype_patch_index[1]
@@ -91,6 +110,7 @@ def compute_rf_prototype(img_size, prototype_patch_index, protoL_rf_info):
                                                        protoL_rf_info)
     return [img_index, rf_indices[0], rf_indices[1],
             rf_indices[2], rf_indices[3]]
+
 
 def compute_rf_prototypes(img_size, prototype_patch_indices, protoL_rf_info):
     rf_prototypes = []
@@ -105,6 +125,7 @@ def compute_rf_prototypes(img_size, prototype_patch_indices, protoL_rf_info):
         rf_prototypes.append([img_index, rf_indices[0], rf_indices[1],
                               rf_indices[2], rf_indices[3]])
     return rf_prototypes
+
 
 def compute_proto_layer_rf_info(img_size, cfg, prototype_kernel_size):
     rf_info = [img_size, 1, 1, 0.5]
@@ -128,13 +149,24 @@ def compute_proto_layer_rf_info(img_size, cfg, prototype_kernel_size):
 
     return proto_layer_rf_info
 
+
+'''
+This function takes architecture info of the entire encoder/features part
+and calculates the receptiv field at the end.
+Input Example = (28, [3, 3, 3, 3, 1], [2, 2, 2, 2, 1], [1, 1, 1, 1, 0])
+output = [resulting_image_size, jump, receptive_field, start_pos]
+'''
 def compute_proto_layer_rf_info_v2(img_size, layer_filter_sizes, layer_strides, layer_paddings, prototype_kernel_size):
 
     assert(len(layer_filter_sizes) == len(layer_strides))
     assert(len(layer_filter_sizes) == len(layer_paddings))
 
-    rf_info = [img_size, 1, 1, 0.5]
+    jump = 1
+    receptive_field = 1
+    start = 0.5
+    rf_info = [img_size, jump, receptive_field, start]
 
+    # iteratively calcualte the receptive field of the entire network
     for i in range(len(layer_filter_sizes)):
         filter_size = layer_filter_sizes[i]
         stride_size = layer_strides[i]

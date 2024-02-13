@@ -17,7 +17,6 @@ from settings import class_specific, use_l1_mask, n_classes, encoder_out_channel
     proto_bound_boxes_filename_prefix, prototype_self_act_filename_prefix
 from vae_components import EncoderBlock, DecoderBlock
 
-
 '''
 Some components of the following implementation were obtained from: https://github.com/cfchen-duke/ProtoPNet
  '''
@@ -32,6 +31,7 @@ class PartProtoVAE(LightningModule):
         clst_coeff,
         sep_coeff,
         l1_coeff,
+        prototype_saving_dir,
         lr = 1e-4,
         init_weights=True
 
@@ -56,6 +56,7 @@ class PartProtoVAE(LightningModule):
         self.input_height = input_height
         self.input_channels = input_channels
         self.latent_channels = prototype_shape[1]
+        self.prototype_saving_dir = prototype_saving_dir
 
         # lists to store loses from each step
         # losses sores as tuple (rec_loss, kl_loss, total_loss)
@@ -69,7 +70,6 @@ class PartProtoVAE(LightningModule):
 
         # VAE COMPONENTS
         self.encoder = EncoderBlock(self.input_channels, encoder_out_channels)
-        self.bottleneck = EncoderBottleneck(encoder_out_channels, self.latent_channels)
         self.decoder = DecoderBlock(encoder_out_channels, self.latent_channels, self.input_channels)
 
         '''
@@ -132,6 +132,7 @@ class PartProtoVAE(LightningModule):
         # x2_patch_sum and intermediate_result are of the same shape
         distances = F.relu(x2_patch_sum + intermediate_result)
 
+        # distances.shape = (64, 40, 2, 2)
         return distances
 
     def prototype_distances(self, x):
@@ -219,7 +220,7 @@ class PartProtoVAE(LightningModule):
         x, y = batch
         p, q, z, x_hat, logits, min_distances = self._run_step(x)
 
-        # pdb.set_trace()
+
         # recon_loss = F.binary_cross_entropy(x_hat, x, reduction="mean")
         recon_loss = F.mse_loss(x_hat, x, reduction="mean")
 
@@ -412,7 +413,6 @@ class PartProtoVAE(LightningModule):
             self.test_outs = batch
 
         return loss
-
 
 
     def on_validation_epoch_end(self):

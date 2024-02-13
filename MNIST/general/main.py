@@ -40,6 +40,7 @@ def main_func(params_dir_path):
                                         params['clst_coeff'],
                                         params['sep_coeff'],
                                         params['l1_coeff'],
+                                        params['prototype_saving_dir'],
                                         params['lr']
                                         )
 
@@ -65,8 +66,9 @@ def main_func(params_dir_path):
                 enable_progress_bar=True,
                 check_val_every_n_epoch=1,
                 enable_checkpointing=True,
+                log_every_n_steps=1,
                 logger=tb_logger,
-                limit_train_batches=200,
+                limit_train_batches=15,
                 limit_val_batches=1,
                 limit_test_batches=1
             )

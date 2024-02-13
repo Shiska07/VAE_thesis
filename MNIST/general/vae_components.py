@@ -19,10 +19,10 @@ class EncoderBlock(nn.Module):
         self.bn3 = nn.BatchNorm2d(64) #[4, 8, 15, 0.5]
 
         self.conv4 = nn.Conv2d(64, 32, kernel_size=3, stride=2, padding=1)
-        self.bn4 = nn.BatchNorm2d(encoder_out_channels) #[2, 32, 31, 0.5]
+        self.bn4 = nn.BatchNorm2d(encoder_out_channels) #[2, 16, 31, 0.5]
 
         self.conv5 = nn.Conv2d(32, encoder_out_channels, kernel_size=1,
-                               stride=1, padding="valid")
+                               stride=1, padding="valid") #[2, 16, 31, 0.5]
 
         # kernel_size, stride and paddinf for each layer
         self.conv_feat = ([3, 3, 3, 3, 1], [2, 2, 2, 2, 1], [1, 1, 1, 1, 0])
@@ -67,13 +67,13 @@ class DecoderBlock(nn.Module):
         return x
 
 
-if __name__ == '__main__':
-    encoder = EncoderBlock(1, 32)
-    pdb.set_trace()
-    print(encoder)
-    print(torchsummary.summary(encoder, (1, 28, 28)))
-
-    decoder = DecoderBlock(32, 16, 1)
-    print(decoder)
-    print(torchsummary.summary(decoder, (10, 2, 2)))
+# if __name__ == '__main__':
+#     encoder = EncoderBlock(1, 32)
+#     pdb.set_trace()
+#     print(encoder)
+#     print(torchsummary.summary(encoder, (1, 28, 28)))
+#
+#     decoder = DecoderBlock(32, 16, 1)
+#     print(decoder)
+#     print(torchsummary.summary(decoder, (16, 2, 2)))
 

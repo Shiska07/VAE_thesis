@@ -1,15 +1,17 @@
-import math
 import os
-import shutil
+import pdb
 import time
+import math
+import shutil
 
-import numpy as np
+import cv2
 import torch
 import helpers
+import numpy as np
 import receptive_field
 import pytorch_lightning as pl
-from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from settings import img_size, class_specific, use_l1_mask, n_classes, \
     encoder_out_channels, \
@@ -90,21 +92,18 @@ class PrototypeProjectionCallback(pl.Callback):
                                     f'epoch{pl_module.current_epoch}')
             helpers.create_dir(self.proto_epoch_dir)
 
-            prototype_shape = pl_module.prototype_shape
-            n_prototypes = pl_module.num_prototypes
-
             '''
-            saves the closest distance seen so far to track if the closest 
+            saves the closest distance seen so far to track if the closest
             prototype has been found, initialized with infinity for each prototype
             '''
-            self.global_min_proto_dist = np.full(n_prototypes, np.inf)
+            self.global_min_proto_dist = np.full(num_prototypes, np.inf)
 
             '''
-            saves the latent space patch representation of training data that gives 
+            saves the latent space patch representation of training data that gives
             the current smallest distance
             '''
             self.global_min_fmap_patches = np.zeros(
-                [n_prototypes,
+                [num_prototypes,
                  prototype_shape[1],
                  prototype_shape[2],
                  prototype_shape[3]])
@@ -120,14 +119,14 @@ class PrototypeProjectionCallback(pl.Callback):
              '''
 
             if save_prototype_class_identity:
-                self.proto_rf_boxes = np.full(shape=[n_prototypes, 6],
+                self.proto_rf_boxes = np.full(shape=[num_prototypes, 6],
                                          fill_value=-1)
-                self.proto_bound_boxes = np.full(shape=[n_prototypes, 6],
+                self.proto_bound_boxes = np.full(shape=[num_prototypes, 6],
                                             fill_value=-1)
             else:
-                self.proto_rf_boxes = np.full(shape=[n_prototypes, 5],
+                self.proto_rf_boxes = np.full(shape=[num_prototypes, 5],
                                          fill_value=-1)
-                self.proto_bound_boxes = np.full(shape=[n_prototypes, 5],
+                self.proto_bound_boxes = np.full(shape=[num_prototypes, 5],
                                             fill_value=-1)
 
             self.dataloader = trainer.datamodule.train_dataloader()
@@ -194,14 +193,16 @@ class PrototypeProjectionCallback(pl.Callback):
             search_batch = search_batch_input
 
         '''
-        Compute forward upto the bottleneck to get latent space representation 
+        Compute forward upto the bottleneck to get latent space representation
         and results from _l2_convolution
         '''
-        protoL_input_torch, proto_dist_torch = pl_module.push_forward(
+
+        _, _, protoL_input_torch, proto_dist_torch = pl_module.push_forward(
             search_batch)
 
-        protoL_input_ = np.copy(protoL_input_torch.numpy())
-        proto_dist_ = np.copy(proto_dist_torch.numpy())
+        pdb.set_trace()
+        protoL_input_ = np.copy(protoL_input_torch.detach().numpy())
+        proto_dist_ = np.copy(proto_dist_torch.detach().numpy())
 
         del protoL_input_torch, proto_dist_torch
 
@@ -210,15 +211,18 @@ class PrototypeProjectionCallback(pl.Callback):
             # img_y is the image's integer label
             for img_index, img_y in enumerate(search_y):
                 img_label = img_y.item()
+                '''
+                dinctionary containing indices of images belonging to each class in a 
+                list.
+                class label is the key and the corresponding list is the value.
+                '''
                 class_to_img_index_dict[img_label].append(img_index)
 
-        prototype_shape = pl_module.prototype_shape
-        n_prototypes = prototype_shape[0]
         proto_h = prototype_shape[2]
         proto_w = prototype_shape[3]
         max_dist = prototype_shape[1] * prototype_shape[2] * prototype_shape[3]
 
-        for j in range(n_prototypes):
+        for j in range(num_prototypes):
             # if n_prototypes_per_class != None:
             if class_specific:
                 # target_class is the class of the class_specific prototype
@@ -234,10 +238,26 @@ class PrototypeProjectionCallback(pl.Callback):
             else:
                 # if it is not class specific, then we will search through
                 # every example
+                '''
+                Get min_distances values for the batch with the jtj prototype but only with images 
+                belonging to prototype j's class identity
+                proto_dist_.shape = (batch_size, num_prototypes, 7, 7)
+                proto_dist_j = (n, 7, 7) where n = number of images beloging to 
+                prototype j's class identity.
+                '''
                 proto_dist_j = proto_dist_[:, j, :, :]
 
+            '''
+            Returns the minimum value in the entire distance array i.e. 
+            distance with 
+            the closest training patch
+            '''
             batch_min_proto_dist_j = np.amin(proto_dist_j)
             if batch_min_proto_dist_j < self.global_min_proto_dist[j]:
+                '''
+                If the distance found is the smalles so far, find the 3D index at 
+                which the value exists
+                '''
                 batch_argmin_proto_dist_j = \
                     list(np.unravel_index(np.argmin(proto_dist_j, axis=None),
                                           proto_dist_j.shape))
@@ -253,6 +273,10 @@ class PrototypeProjectionCallback(pl.Callback):
 
                 # retrieve the corresponding feature map patch
                 img_index_in_batch = batch_argmin_proto_dist_j[0]
+
+                '''
+                Get index information for slicing closest training patch.
+                '''
                 fmap_height_start_index = batch_argmin_proto_dist_j[
                                               1] * prototype_layer_stride
                 fmap_height_end_index = fmap_height_start_index + proto_h
@@ -260,39 +284,73 @@ class PrototypeProjectionCallback(pl.Callback):
                                              2] * prototype_layer_stride
                 fmap_width_end_index = fmap_width_start_index + proto_w
 
+                '''
+                Extract patch from the closeset training image.
+                '''
                 batch_min_fmap_patch_j = protoL_input_[img_index_in_batch,
                                          :,
                                          fmap_height_start_index:fmap_height_end_index,
                                          fmap_width_start_index:fmap_width_end_index]
 
+                # all index info of the closest training patch
                 self.global_min_proto_dist[j] = batch_min_proto_dist_j
+
+                # value of the closest traning patch
                 self.global_min_fmap_patches[j] = batch_min_fmap_patch_j
 
+
+                '''
+                This part uses the receptive field information to generate 
+                visualization in the pixel space.
+                '''
                 # get the receptive field boundary of the image patch
                 # that generates the representation
                 layer_filter_sizes, layer_strides, layer_paddings = \
                     pl_module.encoder.conv_info()
+
+                '''
+                Compute receptive field at prototype layer
+                '''
                 protoL_rf_info = receptive_field.compute_proto_layer_rf_info_v2(img_size,
                                                          layer_filter_sizes=layer_filter_sizes,
                                                          layer_strides=layer_strides,
                                                          layer_paddings=layer_paddings,
                                                          prototype_kernel_size=prototype_shape[2])
 
-                rf_prototype_j = receptive_field.compute_rf_prototype(search_batch.size(2),
+                '''
+                Using the network's receptive field, find the corresponding 
+                spatial indices for cropping in image space. [y1, y1, x1, x2] 
+                '''
+                rf_prototype_j = receptive_field.compute_rf_prototype(img_size,
                                                       batch_argmin_proto_dist_j,
                                                       protoL_rf_info)
 
                 # get the whole image
                 original_img_j = search_batch_input[rf_prototype_j[0]]
                 original_img_j = original_img_j.numpy()
+
+                '''
+                original shape is (channels, height, width)
+                transpose to (height, width, channels)
+                '''
                 original_img_j = np.transpose(original_img_j, (1, 2, 0))
                 original_img_size = original_img_j.shape[0]
 
-                # crop out the receptive field
+                # crop out the receptive field covered by th prototype in the
+                # original image
                 rf_img_j = original_img_j[rf_prototype_j[1]:rf_prototype_j[2],
                            rf_prototype_j[3]:rf_prototype_j[4], :]
 
-                # save the prototype receptive field information
+                '''
+                save the prototype receptive field information
+                proto_rf_boxes and proto_bound_boxes column:
+                0: image index in the entire dataset
+                1: height start index
+                2: height end index
+                3: width start index
+                4: width end index
+                5: (optional) class identity
+                '''
                 self.proto_rf_boxes[j, 0] = rf_prototype_j[
                                            0] + start_index_of_search_batch
                 self.proto_rf_boxes[j, 1] = rf_prototype_j[1]

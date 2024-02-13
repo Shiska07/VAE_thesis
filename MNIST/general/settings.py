@@ -12,7 +12,7 @@ add_on_layers_type = 'regular'
 class_specific = True
 use_l1_mask = True
 
-push_start = 10
+push_start = 2
 push_epochs_interval = 2
 
 weight_matrix_filename = 'outputL_weights'
