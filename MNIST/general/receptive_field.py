@@ -5,6 +5,9 @@ import numpy as np
 This module was obtained from ProtoPNet's implementation on github: https://github.com/cfchen-duke/ProtoPNet
 '''
 
+'''
+Returns indices of region corresponding to the highest activation
+'''
 def find_high_activation_crop(activation_map, percentile=95):
     threshold = np.percentile(activation_map, percentile)
     mask = np.ones(activation_map.shape)

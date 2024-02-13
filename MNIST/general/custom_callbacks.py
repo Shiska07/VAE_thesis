@@ -362,6 +362,8 @@ class PrototypeProjectionCallback(pl.Callback):
 
                 # find the highly activated region of the original image
                 proto_dist_img_j = proto_dist_[img_index_in_batch, j, :, :]
+
+                # apply activation function to distance for visualization
                 if prototype_activation_function == 'log':
                     proto_act_img_j = np.log((proto_dist_img_j + 1) / (
                                 proto_dist_img_j + pl_module.epsilon))
@@ -370,6 +372,8 @@ class PrototypeProjectionCallback(pl.Callback):
                 else:
                     proto_act_img_j = prototype_activation_function_in_numpy(
                         proto_dist_img_j)
+
+                # upsample the activation map
                 upsampled_act_img_j = cv2.resize(proto_act_img_j, dsize=(
                 original_img_size, original_img_size),
                                                  interpolation=cv2.INTER_CUBIC)
@@ -388,21 +392,26 @@ class PrototypeProjectionCallback(pl.Callback):
                 if self.proto_bound_boxes.shape[1] == 6 and search_y is not None:
                     self.proto_bound_boxes[j, 5] = search_y[rf_prototype_j[0]].item()
 
+
                 if self.proto_epoch_dir is not None:
                     if prototype_self_act_filename_prefix is not None:
                         # save the numpy array of the prototype self activation
+
                         np.save(os.path.join(self.proto_epoch_dir,
                                              prototype_self_act_filename_prefix + str(
                                                  j) + '.npy'),
                                 proto_act_img_j)
                     if prototype_img_filename_prefix is not None:
+
+                        '''
+                        1. SAVE original image
+                        '''
                         # save the whole image containing the prototype as png
                         plt.imsave(os.path.join(self.proto_epoch_dir,
                                                 prototype_img_filename_prefix + '-original' + str(
                                                     j) + '.png'),
                                    original_img_j,
-                                   vmin=0.0,
-                                   vmax=1.0)
+                                   cmap = 'gray')
                         # overlay (upsampled) self activation on original image and save the result
                         rescaled_act_img_j = upsampled_act_img_j - np.amin(
                             upsampled_act_img_j)
@@ -413,6 +422,10 @@ class PrototypeProjectionCallback(pl.Callback):
                         heatmap = np.float32(heatmap) / 255
                         heatmap = heatmap[..., ::-1]
                         overlayed_original_img_j = 0.5 * original_img_j + 0.3 * heatmap
+
+                        '''
+                        2. SAVE original image overlayed with activation map
+                        '''
                         plt.imsave(os.path.join(self.proto_epoch_dir,
                                                 prototype_img_filename_prefix + '-original_with_self_act' + str(
                                                     j) + '.png'),
@@ -420,15 +433,24 @@ class PrototypeProjectionCallback(pl.Callback):
                                    vmin=0.0,
                                    vmax=1.0)
 
+                        '''
+                        3. SAVE image corresponding to the prototype's 
+                        receptive field
+                        '''
                         # if different from the original (whole) image, save the prototype receptive field as png
                         if rf_img_j.shape[0] != original_img_size or rf_img_j.shape[
                             1] != original_img_size:
+
                             plt.imsave(os.path.join(self.proto_epoch_dir,
                                                     prototype_img_filename_prefix + '-receptive_field' + str(
                                                         j) + '.png'),
                                        rf_img_j,
-                                       vmin=0.0,
-                                       vmax=1.0)
+                                       cmap = 'gray')
+
+                            '''
+                            4. SAVE image corresponding to the prototype's 
+                            receptive field overlayed with activation map
+                            '''
                             overlayed_rf_img_j = overlayed_original_img_j[
                                                  rf_prototype_j[1]:rf_prototype_j[2],
                                                  rf_prototype_j[3]:rf_prototype_j[4]]
@@ -440,6 +462,10 @@ class PrototypeProjectionCallback(pl.Callback):
                                        vmax=1.0)
 
                         # save the prototype image (highly activated region of the whole image)
+                        '''
+                        5. SAVE prototype image corresponding to the highly 
+                        activated region.
+                        '''
                         plt.imsave(os.path.join(self.proto_epoch_dir,
                                                 prototype_img_filename_prefix + str(
                                                     j) + '.png'),
