@@ -72,6 +72,10 @@ class PartProtoVAE(LightningModule):
         self.encoder = EncoderBlock(self.input_channels, encoder_out_channels)
         self.decoder = DecoderBlock(encoder_out_channels, self.latent_channels, self.input_channels)
 
+        self.mode = None
+        self.test_tag = "test"
+        self.last_push_epoch = 0
+
         '''
         Initialization of prototype class identity. Thi part is from PrototPNet Implementation.
         '''
@@ -114,6 +118,57 @@ class PartProtoVAE(LightningModule):
 
     def _initialize_weights(self):
         self.set_last_layer_incorrect_connection(incorrect_strength=-0.5)
+
+    def set_mode(self, mode="joint"):
+        self.mode = mode
+
+        # warm up classifier block
+        if self.mode == "warm":
+
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+
+            for param in self.decoder.parameters():
+                param.requires_grad = False
+
+            self.prototype_vectors.requires_grad = True
+
+            for param in self.last_layer.parameters():
+                param.requires_grad = True
+
+            print("\tMode = warm")
+
+
+        elif self.mode == "joint":
+
+            for param in self.encoder.parameters():
+                param.requires_grad = True
+
+            for param in self.decoder.parameters():
+                param.requires_grad = True
+
+            self.prototype_vectors.requires_grad = True
+
+            for param in self.last_layer.parameters():
+                param.requires_grad = False
+
+            print("\tMode = joint")
+
+
+        elif self.mode == "last_only":
+
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+
+            for param in self.decoder.parameters():
+                param.requires_grad = False
+
+            self.prototype_vectors.requires_grad = False
+
+            for param in self.last_layer.parameters():
+                param.requires_grad = True
+
+            print("\tMode = last Layer")
 
     def _l2_convolution(self, x):
 
@@ -393,10 +448,11 @@ class PartProtoVAE(LightningModule):
 
         return loss
 
+
     def test_step(self, batch, batch_idx):
 
         loss, logs, x_hat = self.step(batch, batch_idx)
-        tag = "test"
+        tag = self.test_tag
 
         for key, val in logs.items():
             self.logger.experiment.add_scalars(key, {tag: val}, self.global_step)

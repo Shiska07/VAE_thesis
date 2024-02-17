@@ -8,15 +8,16 @@ encoder_out_channels = 32
 prototype_activation_function = 'log'
 add_on_layers_type = 'regular'
 
-
 class_specific = True
 use_l1_mask = True
 
 push_start = 2
-push_epochs_interval = 2
+push_epoch_interval = 3
 
 weight_matrix_filename = 'outputL_weights'
 prototype_img_filename_prefix = 'prototype-img'
 prototype_self_act_filename_prefix = 'prototype-self-act'
 proto_bound_boxes_filename_prefix = 'bb'
 save_prototype_class_identity=True
+
+

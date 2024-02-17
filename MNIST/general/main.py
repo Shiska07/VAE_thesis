@@ -73,6 +73,7 @@ def main_func(params_dir_path):
                 limit_test_batches=1
             )
 
+
             trainer.fit(protov_model, data_module)
             trainer.test(protov_model, data_module)
 
