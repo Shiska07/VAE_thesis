@@ -68,12 +68,12 @@ def main_func(params_dir_path):
                 enable_checkpointing=True,
                 log_every_n_steps=1,
                 logger=tb_logger,
-                limit_train_batches=15,
+                limit_train_batches=10,
                 limit_val_batches=1,
                 limit_test_batches=1
             )
 
-
+            protov_model.set_mode("joint")
             trainer.fit(protov_model, data_module)
             trainer.test(protov_model, data_module)
 

@@ -1,5 +1,7 @@
 import os
 import json
+
+import numpy as np
 import torch
 import pandas as pd
 from os import makedirs
@@ -58,6 +60,17 @@ def get_accuracy(logits, targets):
 
     return accuracy
 
+def normalize_array_0_1(arr):
+
+
+    # Compute the minimum and maximum values
+    min_value = np.min(arr)
+    max_value = np.max(arr)
+
+    # Normalize the array between 0 and 1
+    normalized_arr = (arr - min_value) / (max_value - min_value)
+
+    return normalized_arr
 
 def create_dir(directory, verbose=False):
     if not exists(directory):

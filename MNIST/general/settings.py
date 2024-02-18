@@ -12,7 +12,7 @@ class_specific = True
 use_l1_mask = True
 
 push_start = 2
-push_epoch_interval = 3
+push_epochs_interval = 3
 
 weight_matrix_filename = 'outputL_weights'
 prototype_img_filename_prefix = 'prototype-img'

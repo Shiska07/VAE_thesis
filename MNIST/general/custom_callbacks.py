@@ -8,6 +8,7 @@ import cv2
 import torch
 import helpers
 import numpy as np
+from PIL import Image
 import receptive_field
 import pytorch_lightning as pl
 import matplotlib.pyplot as plt
@@ -92,6 +93,7 @@ class PrototypeProjectionCallback(pl.Callback):
                 (pl_module.current_epoch - pl_module.last_push_epoch) == \
                 push_epochs_interval:
 
+
             start = time.time()
             self.proto_epoch_dir = os.path.join(pl_module.prototype_saving_dir,
                                     f'epoch{pl_module.current_epoch}')
@@ -134,8 +136,9 @@ class PrototypeProjectionCallback(pl.Callback):
                 self.proto_bound_boxes = np.full(shape=[num_prototypes, 5],
                                             fill_value=-1)
 
-            self.dataloader = trainer.train_dataloader()
-            self.test_dataloader = trainer.test_dataloaders()
+
+            self.dataloader = trainer.datamodule.train_dataloader()
+            self.test_dataloader = trainer.datamodule.test_dataloader()
 
             # log test losses before push
             pl_module.test_tag = "pre_push_test"
@@ -153,18 +156,12 @@ class PrototypeProjectionCallback(pl.Callback):
                 '''
                 start_index_of_search_batch = push_iter * self.search_batch_size
 
-                # if current batch is final batch
-                if push_iter ==(num_batches - 1):
-                    save_prototypes = True
-                else:
-                    save_prototypes = False
-
                 self.update_prototypes_on_batch(trainer,
                                                 pl_module,
                                                 search_batch_input,
                                                 search_y,
                                                 start_index_of_search_batch,
-                                                save_prototypes)
+                                                True)
 
             if self.proto_epoch_dir is not None and proto_bound_boxes_filename_prefix \
                     is not None:
@@ -233,7 +230,6 @@ class PrototypeProjectionCallback(pl.Callback):
         _, _, protoL_input_torch, proto_dist_torch = pl_module.push_forward(
             search_batch)
 
-        pdb.set_trace()
         protoL_input_ = np.copy(protoL_input_torch.detach().numpy())
         proto_dist_ = np.copy(proto_dist_torch.detach().numpy())
 
@@ -308,7 +304,7 @@ class PrototypeProjectionCallback(pl.Callback):
                 img_index_in_batch = batch_argmin_proto_dist_j[0]
 
                 '''
-                Get index information for slicing closest training patch.
+                Get index information for extracting closest training patch.
                 '''
                 fmap_height_start_index = batch_argmin_proto_dist_j[
                                               1] * prototype_layer_stride
@@ -336,177 +332,203 @@ class PrototypeProjectionCallback(pl.Callback):
                 This part uses the receptive field information to generate 
                 visualization in the pixel space.
                 '''
-                if save_prototypes:
-
-                    # get the receptive field boundary of the image patch
-                    # that generates the representation
-                    layer_filter_sizes, layer_strides, layer_paddings = \
-                        pl_module.encoder.conv_info()
-
-                    '''
-                    Compute receptive field at prototype layer
-                    '''
-                    protoL_rf_info = receptive_field.compute_proto_layer_rf_info_v2(img_size,
-                                                             layer_filter_sizes=layer_filter_sizes,
-                                                             layer_strides=layer_strides,
-                                                             layer_paddings=layer_paddings,
-                                                             prototype_kernel_size=prototype_shape[2])
-
-                    '''
-                    Using the network's receptive field, find the corresponding 
-                    spatial indices for cropping in image space. [y1, y1, x1, x2] 
-                    '''
-                    rf_prototype_j = receptive_field.compute_rf_prototype(img_size,
-                                                          batch_argmin_proto_dist_j,
-                                                          protoL_rf_info)
-
-                    # get the whole image
-                    original_img_j = search_batch_input[rf_prototype_j[0]]
-                    original_img_j = original_img_j.numpy()
-
-                    '''
-                    original shape is (channels, height, width)
-                    transpose to (height, width, channels)
-                    '''
-                    original_img_j = np.transpose(original_img_j, (1, 2, 0))
-                    original_img_size = original_img_j.shape[0]
-
-                    # crop out the receptive field covered by th prototype in the
-                    # original image
-                    rf_img_j = original_img_j[rf_prototype_j[1]:rf_prototype_j[2],
-                               rf_prototype_j[3]:rf_prototype_j[4], :]
-
-                    '''
-                    save the prototype receptive field information
-                    proto_rf_boxes and proto_bound_boxes column:
-                    0: image index in the entire dataset
-                    1: height start index
-                    2: height end index
-                    3: width start index
-                    4: width end index
-                    5: (optional) class identity
-                    '''
-                    self.proto_rf_boxes[j, 0] = rf_prototype_j[
-                                               0] + start_index_of_search_batch
-                    self.proto_rf_boxes[j, 1] = rf_prototype_j[1]
-                    self.proto_rf_boxes[j, 2] = rf_prototype_j[2]
-                    self.proto_rf_boxes[j, 3] = rf_prototype_j[3]
-                    self.proto_rf_boxes[j, 4] = rf_prototype_j[4]
-                    if self.proto_rf_boxes.shape[1] == 6 and search_y is not None:
-                        self.proto_rf_boxes[j, 5] = search_y[rf_prototype_j[0]].item()
-
-                    # find the highly activated region of the original image
-                    proto_dist_img_j = proto_dist_[img_index_in_batch, j, :, :]
-
-                    # apply activation function to distance for visualization
-                    if prototype_activation_function == 'log':
-                        proto_act_img_j = np.log((proto_dist_img_j + 1) / (
-                                    proto_dist_img_j + pl_module.epsilon))
-                    elif prototype_activation_function == 'linear':
-                        proto_act_img_j = max_dist - proto_dist_img_j
-                    else:
-                        proto_act_img_j = prototype_activation_function_in_numpy(
-                            proto_dist_img_j)
-
-                    # upsample the activation map
-                    upsampled_act_img_j = cv2.resize(proto_act_img_j, dsize=(
-                    original_img_size, original_img_size),
-                                                     interpolation=cv2.INTER_CUBIC)
-                    proto_bound_j = receptive_field.find_high_activation_crop(
-                        upsampled_act_img_j)
-                    # crop out the image patch with high activation as prototype image
-                    proto_img_j = original_img_j[proto_bound_j[0]:proto_bound_j[1],
-                                  proto_bound_j[2]:proto_bound_j[3], :]
-
-                    # save the prototype boundary (rectangular boundary of highly activated region)
-                    self.proto_bound_boxes[j, 0] = self.proto_rf_boxes[j, 0]
-                    self.proto_bound_boxes[j, 1] = proto_bound_j[0]
-                    self.proto_bound_boxes[j, 2] = proto_bound_j[1]
-                    self.proto_bound_boxes[j, 3] = proto_bound_j[2]
-                    self.proto_bound_boxes[j, 4] = proto_bound_j[3]
-                    if self.proto_bound_boxes.shape[1] == 6 and search_y is not None:
-                        self.proto_bound_boxes[j, 5] = search_y[rf_prototype_j[0]].item()
 
 
-                    if self.proto_epoch_dir is not None:
-                        if prototype_self_act_filename_prefix is not None:
-                            # save the numpy array of the prototype self activation
+                # get the receptive field boundary of the image patch
+                # that generates the representation
+                layer_filter_sizes, layer_strides, layer_paddings = \
+                    pl_module.encoder.conv_info()
 
-                            np.save(os.path.join(self.proto_epoch_dir,
-                                                 prototype_self_act_filename_prefix + str(
-                                                     j) + '.npy'),
-                                    proto_act_img_j)
-                        if prototype_img_filename_prefix is not None:
+                '''
+                Compute receptive field at prototype layer
+                '''
+                protoL_rf_info = receptive_field.compute_proto_layer_rf_info_v2(img_size,
+                                                         layer_filter_sizes=layer_filter_sizes,
+                                                         layer_strides=layer_strides,
+                                                         layer_paddings=layer_paddings,
+                                                         prototype_kernel_size=prototype_shape[2])
+
+                '''
+                Using the network's receptive field, find the corresponding 
+                spatial indices for cropping in image space. [y1, y1, x1, x2] 
+                '''
+                rf_prototype_j = receptive_field.compute_rf_prototype(img_size,
+                                                      batch_argmin_proto_dist_j,
+                                                      protoL_rf_info)
+
+                # get the whole image
+                original_img_j = search_batch_input[rf_prototype_j[0]]
+                original_img_j = original_img_j.numpy()
+
+                '''
+                original shape is (channels, height, width)
+                transpose to (height, width, channels)
+                '''
+                original_img_j = np.transpose(original_img_j, (1, 2, 0))
+                original_img_size = original_img_j.shape[0]
+
+                # crop out the receptive field covered by th prototype in the
+                # original image
+                rf_img_j = original_img_j[rf_prototype_j[1]:rf_prototype_j[2],
+                           rf_prototype_j[3]:rf_prototype_j[4], :]
+
+                '''
+                save the prototype receptive field information
+                proto_rf_boxes and proto_bound_boxes column:
+                0: image index in the entire dataset
+                1: height start index
+                2: height end index
+                3: width start index
+                4: width end index
+                5: (optional) class identity
+                '''
+                self.proto_rf_boxes[j, 0] = rf_prototype_j[
+                                           0] + start_index_of_search_batch
+                self.proto_rf_boxes[j, 1] = rf_prototype_j[1]
+                self.proto_rf_boxes[j, 2] = rf_prototype_j[2]
+                self.proto_rf_boxes[j, 3] = rf_prototype_j[3]
+                self.proto_rf_boxes[j, 4] = rf_prototype_j[4]
+                if self.proto_rf_boxes.shape[1] == 6 and search_y is not None:
+                    self.proto_rf_boxes[j, 5] = search_y[rf_prototype_j[0]].item()
+
+                # find the highly activated region of the original image
+                proto_dist_img_j = proto_dist_[img_index_in_batch, j, :, :]
+
+                # apply activation function to distance for visualization
+                if prototype_activation_function == 'log':
+                    proto_act_img_j = np.log((proto_dist_img_j + 1) / (
+                                proto_dist_img_j + pl_module.epsilon))
+                elif prototype_activation_function == 'linear':
+                    proto_act_img_j = max_dist - proto_dist_img_j
+                else:
+                    proto_act_img_j = prototype_activation_function_in_numpy(
+                        proto_dist_img_j)
+
+                # upsample the activation map
+                upsampled_act_img_j = cv2.resize(proto_act_img_j, dsize=(
+                original_img_size, original_img_size),
+                                                 interpolation=cv2.INTER_CUBIC)
+                proto_bound_j = receptive_field.find_high_activation_crop(
+                    upsampled_act_img_j)
+                # crop out the image patch with high activation as prototype image
+                proto_img_j = original_img_j[proto_bound_j[0]:proto_bound_j[1],
+                              proto_bound_j[2]:proto_bound_j[3], :]
+
+                # save the prototype boundary (rectangular boundary of highly activated region)
+                self.proto_bound_boxes[j, 0] = self.proto_rf_boxes[j, 0]
+                self.proto_bound_boxes[j, 1] = proto_bound_j[0]
+                self.proto_bound_boxes[j, 2] = proto_bound_j[1]
+                self.proto_bound_boxes[j, 3] = proto_bound_j[2]
+                self.proto_bound_boxes[j, 4] = proto_bound_j[3]
+                if self.proto_bound_boxes.shape[1] == 6 and search_y is not None:
+                    self.proto_bound_boxes[j, 5] = search_y[rf_prototype_j[0]].item()
+
+
+                if self.proto_epoch_dir is not None:
+                    if prototype_self_act_filename_prefix is not None:
+                        # save the numpy array of the prototype self activation
+
+                        np.save(os.path.join(self.proto_epoch_dir,
+                                             prototype_self_act_filename_prefix + str(
+                                                 j) + '.npy'),
+                                proto_act_img_j)
+
+                    if prototype_img_filename_prefix is not None:
+
+                        '''
+                        1. SAVE original image
+                        '''
+                        #save the whole image containing the prototype as png
+                        original_img_j_norm = helpers.normalize_array_0_1(
+                            original_img_j)
+                        original_img_j_pil = Image.fromarray(np.squeeze(
+                            original_img_j_norm*255).astype('uint8'), 'L')
+                        original_img_j_pil.save(os.path.join(self.proto_epoch_dir,
+                                                prototype_img_filename_prefix + '-original' + str(
+                                                    j) + '.png'))
+                        # plt.imsave(os.path.join(self.proto_epoch_dir,
+                        #                         prototype_img_filename_prefix + '-original' + str(
+                        #                             j) + '.png'),
+                        #            original_img_j,
+                        #            cmap = 'gray')
+                        # overlay (upsampled) self activation on original image and save the result
+                        rescaled_act_img_j = upsampled_act_img_j - np.amin(
+                            upsampled_act_img_j)
+                        rescaled_act_img_j = rescaled_act_img_j / np.amax(
+                            rescaled_act_img_j)
+                        heatmap = cv2.applyColorMap(
+                            np.uint8(255 * rescaled_act_img_j), cv2.COLORMAP_JET)
+                        heatmap = np.float32(heatmap) / 255
+                        heatmap = heatmap[..., ::-1]
+                        overlayed_original_img_j = 0.5 * original_img_j_norm + \
+                                                   0.3 * heatmap
+
+                        '''
+                        2. SAVE original image overlayed with activation map
+                        '''
+                        pdb.set_trace()
+                        plt.imsave(os.path.join(self.proto_epoch_dir,
+                                                prototype_img_filename_prefix + '-original_with_self_act' + str(
+                                                    j) + '.png'),
+                                   overlayed_original_img_j,
+                                   vmin=0.0,
+                                   vmax=1.0)
+
+                        '''
+                        3. SAVE image corresponding to the prototype's 
+                        receptive field
+                        '''
+                        # if different from the original (whole) image, save the prototype receptive field as png
+                        if rf_img_j.shape[0] != original_img_size or rf_img_j.shape[
+                            1] != original_img_size:
+
+                            # normalize
+                            rf_img_j_norm = helpers.normalize_array_0_1(rf_img_j)
+                            rf_img_j_pil = Image.fromarray(np.squeeze(
+                                rf_img_j_norm*255).astype('uint8'), 'L')
+                            rf_img_j_pil.save(os.path.join(self.proto_epoch_dir,
+                                                    prototype_img_filename_prefix + '-receptive_field' + str(
+                                                        j) + '.png'))
+
+                            # plt.imsave(os.path.join(self.proto_epoch_dir,
+                            #                         prototype_img_filename_prefix + '-receptive_field' + str(
+                            #                             j) + '.png'),
+                            #            rf_img_j,
+                            #            cmap = 'gray')
 
                             '''
-                            1. SAVE original image
+                            4. SAVE image corresponding to the prototype's 
+                            receptive field overlayed with activation map
                             '''
-                            # save the whole image containing the prototype as png
+                            overlayed_rf_img_j = overlayed_original_img_j[
+                                                 rf_prototype_j[1]:rf_prototype_j[2],
+                                                 rf_prototype_j[3]:rf_prototype_j[4]]
                             plt.imsave(os.path.join(self.proto_epoch_dir,
-                                                    prototype_img_filename_prefix + '-original' + str(
+                                                    prototype_img_filename_prefix + '-receptive_field_with_self_act' + str(
                                                         j) + '.png'),
-                                       original_img_j,
-                                       cmap = 'gray')
-                            # overlay (upsampled) self activation on original image and save the result
-                            rescaled_act_img_j = upsampled_act_img_j - np.amin(
-                                upsampled_act_img_j)
-                            rescaled_act_img_j = rescaled_act_img_j / np.amax(
-                                rescaled_act_img_j)
-                            heatmap = cv2.applyColorMap(
-                                np.uint8(255 * rescaled_act_img_j), cv2.COLORMAP_JET)
-                            heatmap = np.float32(heatmap) / 255
-                            heatmap = heatmap[..., ::-1]
-                            overlayed_original_img_j = 0.5 * original_img_j + 0.3 * heatmap
-
-                            '''
-                            2. SAVE original image overlayed with activation map
-                            '''
-                            plt.imsave(os.path.join(self.proto_epoch_dir,
-                                                    prototype_img_filename_prefix + '-original_with_self_act' + str(
-                                                        j) + '.png'),
-                                       overlayed_original_img_j,
+                                       overlayed_rf_img_j,
                                        vmin=0.0,
                                        vmax=1.0)
 
-                            '''
-                            3. SAVE image corresponding to the prototype's 
-                            receptive field
-                            '''
-                            # if different from the original (whole) image, save the prototype receptive field as png
-                            if rf_img_j.shape[0] != original_img_size or rf_img_j.shape[
-                                1] != original_img_size:
+                        # save the prototype image (highly activated region of the whole image)
+                        '''
+                        5. SAVE prototype image corresponding to the highly 
+                        activated region.
+                        '''
+                        proto_img_j_norm = helpers.normalize_array_0_1(
+                            proto_img_j)
+                        proto_img_j_pil = Image.fromarray(np.squeeze(
+                            proto_img_j_norm*255).astype('uint8'), 'L')
+                        proto_img_j_pil.save(os.path.join(self.proto_epoch_dir,
+                                                prototype_img_filename_prefix + str(
+                                                    j) + '.png'))
 
-                                plt.imsave(os.path.join(self.proto_epoch_dir,
-                                                        prototype_img_filename_prefix + '-receptive_field' + str(
-                                                            j) + '.png'),
-                                           rf_img_j,
-                                           cmap = 'gray')
-
-                                '''
-                                4. SAVE image corresponding to the prototype's 
-                                receptive field overlayed with activation map
-                                '''
-                                overlayed_rf_img_j = overlayed_original_img_j[
-                                                     rf_prototype_j[1]:rf_prototype_j[2],
-                                                     rf_prototype_j[3]:rf_prototype_j[4]]
-                                plt.imsave(os.path.join(self.proto_epoch_dir,
-                                                        prototype_img_filename_prefix + '-receptive_field_with_self_act' + str(
-                                                            j) + '.png'),
-                                           overlayed_rf_img_j,
-                                           vmin=0.0,
-                                           vmax=1.0)
-
-                            # save the prototype image (highly activated region of the whole image)
-                            '''
-                            5. SAVE prototype image corresponding to the highly 
-                            activated region.
-                            '''
-                            plt.imsave(os.path.join(self.proto_epoch_dir,
-                                                    prototype_img_filename_prefix + str(
-                                                        j) + '.png'),
-                                       proto_img_j,
-                                       vmin=0.0,
-                                       vmax=1.0)
+                        # plt.imsave(os.path.join(self.proto_epoch_dir,
+                        #                         prototype_img_filename_prefix + str(
+                        #                             j) + '.png'),
+                        #            proto_img_j,
+                        #            vmin=0.0,
+                        #            vmax=1.0)
 
         if class_specific:
             del class_to_img_index_dict
