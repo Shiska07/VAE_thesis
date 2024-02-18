@@ -123,7 +123,22 @@ class PartProtoVAE(LightningModule):
         self.mode = mode
 
         # warm up classifier block
-        if self.mode == "warm":
+        if self.mode == "vae_only":
+
+            for param in self.encoder.parameters():
+                param.requires_grad = True
+
+            for param in self.decoder.parameters():
+                param.requires_grad = True
+
+            self.prototype_vectors.requires_grad = False
+
+            for param in self.last_layer.parameters():
+                param.requires_grad = False
+
+            print("\tMode = vae_only")
+
+        elif self.mode == "warm":
 
             for param in self.encoder.parameters():
                 param.requires_grad = False
@@ -137,7 +152,6 @@ class PartProtoVAE(LightningModule):
                 param.requires_grad = True
 
             print("\tMode = warm")
-
 
         elif self.mode == "joint":
 
@@ -356,13 +370,18 @@ class PartProtoVAE(LightningModule):
                 l1 = self.last_layer.weight.norm(p=1)
 
 
-            # DEFINE LOSS TERM
-            loss = (self.kl_coeff * kl
-                    + self.recon_coeff * recon_loss
-                    + self.ce_coeff * cross_entropy
-                    + self.clst_coeff + cluster_cost
-                    + self.sep_coeff * separation_cost
-                    + self.l1_coeff * l1)
+            if self.mode == "vae_only":
+                loss = self.kl_coeff * kl \
+                       + self.recon_coeff * recon_loss
+
+            else:
+                # DEFINE LOSS TERM
+                loss = (self.kl_coeff * kl
+                        + self.recon_coeff * recon_loss
+                        + self.ce_coeff * cross_entropy
+                        + self.clst_coeff + cluster_cost
+                        + self.sep_coeff * separation_cost
+                        + self.l1_coeff * l1)
 
             logs = {
                 "recon_loss": recon_loss,
@@ -387,12 +406,17 @@ class PartProtoVAE(LightningModule):
             cluster_cost = torch.mean(min_distance)
             l1 = self.last_layer.weight.norm(p=1)
 
-            # DEFINE LOSS TERM
-            loss = (self.kl_coeff * kl
-                    + self.recon_coeff * recon_loss
-                    + self.ce_coeff * cross_entropy
-                    + self.clst_coeff + cluster_cost
-                    + self.l1_coeff * l1)
+            if self.mode == "vae_only":
+                loss = self.kl_coeff * kl \
+                       + self.recon_coeff * recon_loss
+
+            else:
+                # DEFINE LOSS TERM
+                loss = (self.kl_coeff * kl
+                        + self.recon_coeff * recon_loss
+                        + self.ce_coeff * cross_entropy
+                        + self.clst_coeff + cluster_cost
+                        + self.l1_coeff * l1)
 
             logs = {
                 "recon_loss": recon_loss,

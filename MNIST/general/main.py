@@ -68,23 +68,14 @@ def main_func(params_dir_path):
                 enable_checkpointing=True,
                 log_every_n_steps=1,
                 logger=tb_logger,
-                limit_train_batches=10,
-                limit_val_batches=1,
-                limit_test_batches=1
+                limit_train_batches=10
+                # limit_val_batches=1,
+                # limit_test_batches=1
             )
 
-            protov_model.set_mode("joint")
+            protov_model.set_mode("vae_only")
             trainer.fit(protov_model, data_module)
             trainer.test(protov_model, data_module)
-
-            # save test loss
-            # protov_model.save_test_loss_data(best_model_ckpt)
-
-            # save plots
-            # train_epoch_hist, val_epoch_hist = protov_model.get_history()
-            # hist_path = os.path.join(params['logging_dir'], params['logging_name'], 'plots')
-            # create_dir(hist_path)
-            # save_plots(train_epoch_hist, val_epoch_hist, hist_path)
 
             # save model
             model_dest = os.path.join(best_model_ckpt_path, 'saved_model')

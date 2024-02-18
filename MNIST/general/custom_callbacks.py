@@ -19,30 +19,30 @@ from settings import img_size, class_specific, use_l1_mask, n_classes, \
     prototype_shape, num_prototypes, prototype_activation_function, push_start, \
     push_epochs_interval, weight_matrix_filename, prototype_img_filename_prefix, \
     proto_bound_boxes_filename_prefix, prototype_self_act_filename_prefix, \
-    save_prototype_class_identity
+    save_prototype_class_identity, vae_only
 
 '''
 Some components of the following implementation were obtained from: https://github.com/cfchen-duke/ProtoPNet
  '''
 
 early_stopping_callback = EarlyStopping(
-                monitor='avg_total_val_loss',
+                monitor="avg_total_val_loss",
                 min_delta=0.1,
                 patience=5,
                 verbose=True,
-                mode='min'
+                mode="min"
             )
 
 def getmodel_ckpt_callback(best_model_ckpt_path, params):
 
     checkpoint_callback = ModelCheckpoint(
-        monitor='avg_total_val_loss',
+        monitor="avg_total_val_loss",
         dirpath=best_model_ckpt_path,  # Directory to save checkpoints
         filename=f"best_model{params['logging_name']}", # Prefix for the
         # checkpoint
         # filenames
         save_top_k=1,  # Save the best model only
-        mode='min',
+        mode="min",
         every_n_epochs=1
     )
 
@@ -85,18 +85,19 @@ class PrototypeProjectionCallback(pl.Callback):
 
         pl_module.training_step_losses.clear()
 
+        if pl_module.current_epoch == vae_only:
+            pl_module.set_mode("joint")
+
         # if last training mode was convex optimization, reset mode ot joint training
         if pl_module.mode == "last_only":
             pl_module.set_mode("joint")
 
         if pl_module.current_epoch > push_start and \
-                (pl_module.current_epoch - pl_module.last_push_epoch) == \
+                (pl_module.current_epoch - pl_module.last_push_epoch) >= \
                 push_epochs_interval:
 
-
-            start = time.time()
             self.proto_epoch_dir = os.path.join(pl_module.prototype_saving_dir,
-                                    f'epoch{pl_module.current_epoch}')
+                                    f"epoch{pl_module.current_epoch}")
             helpers.create_dir(self.proto_epoch_dir)
 
             '''
@@ -142,6 +143,7 @@ class PrototypeProjectionCallback(pl.Callback):
 
             # log test losses before push
             pl_module.test_tag = "pre_push_test"
+            print(f"TEST PRE-PUSH FOR EPOCH {pl_module.current_epoch}:\n")
             trainer.test(pl_module, self.test_dataloader)
             self.search_batch_size = self.dataloader.batch_size
             num_batches = len(self.dataloader)
@@ -160,46 +162,40 @@ class PrototypeProjectionCallback(pl.Callback):
                                                 pl_module,
                                                 search_batch_input,
                                                 search_y,
-                                                start_index_of_search_batch,
-                                                True)
+                                                start_index_of_search_batch)
 
             if self.proto_epoch_dir is not None and proto_bound_boxes_filename_prefix \
                     is not None:
                 # save data corresponding to the receptive field
                 np.save(os.path.join(self.proto_epoch_dir,
-                                     proto_bound_boxes_filename_prefix + '-receptive_field' + str(
-                                         pl_module.current_epoch) + '.npy'),
+                                     proto_bound_boxes_filename_prefix + "-receptive_field" + str(
+                                         pl_module.current_epoch) + ".npy"),
                         self.proto_rf_boxes)
 
                 # save data corresponding to the bounding boxes
                 np.save(os.path.join(self.proto_epoch_dir,
                                      proto_bound_boxes_filename_prefix + str(
-                                         pl_module.current_epoch) + '.npy'),
+                                         pl_module.current_epoch) + ".npy"),
                         self.proto_bound_boxes)
 
-            print('\tExecuting push ...')
+            print(f"\tExecuting push ...EPOCH {pl_module.current_epoch}")
             prototype_update = np.reshape(self.global_min_fmap_patches,
                                           tuple(prototype_shape))
             pl_module.prototype_vectors.data.copy_(
                 torch.tensor(prototype_update, dtype=torch.float32))
 
-            end = time.time()
-
             # note push epoch
             pl_module.last_push_epoch = pl_module.current_epoch
-            print('\tpush time: \t{0}'.format(end - start))
 
-            # log test losses before push
+            # get post push test results
             pl_module.test_tag = "post_push_test"
+            print(f"POST-PUSH TEST FOR EPOCH {pl_module.current_epoch}:\n")
             trainer.test(pl_module, self.test_dataloader)
             pl_module.test_tag = "test"
 
-            '''
-            Since the prototypes have been pushed, only the last layer
-            will be trained in the next epoch.
-            '''
-            #  set mode for convex optimization of last layer
+            # set mode to convex optimization
             pl_module.set_mode("last_only")
+
 
 
     def update_prototypes_on_batch(self,
@@ -208,14 +204,13 @@ class PrototypeProjectionCallback(pl.Callback):
                                    search_batch_input,
                                    search_y,
                                    start_index_of_search_batch,
-                                   save_prototypes,
                                    prototype_activation_function_in_numpy=None,
                                    preprocess_input_function=None,
                                    prototype_layer_stride=1):
 
         # preprocess batch if necessary
         if preprocess_input_function is not None:
-            # print('preprocessing input for pushing ...')
+            # print("preprocessing input for pushing ...")
             # search_batch = copy.deepcopy(search_batch_input)
             search_batch = preprocess_input_function(search_batch_input)
 
@@ -332,8 +327,6 @@ class PrototypeProjectionCallback(pl.Callback):
                 This part uses the receptive field information to generate 
                 visualization in the pixel space.
                 '''
-
-
                 # get the receptive field boundary of the image patch
                 # that generates the representation
                 layer_filter_sizes, layer_strides, layer_paddings = \
@@ -395,10 +388,10 @@ class PrototypeProjectionCallback(pl.Callback):
                 proto_dist_img_j = proto_dist_[img_index_in_batch, j, :, :]
 
                 # apply activation function to distance for visualization
-                if prototype_activation_function == 'log':
+                if prototype_activation_function == "log":
                     proto_act_img_j = np.log((proto_dist_img_j + 1) / (
                                 proto_dist_img_j + pl_module.epsilon))
-                elif prototype_activation_function == 'linear':
+                elif prototype_activation_function == "linear":
                     proto_act_img_j = max_dist - proto_dist_img_j
                 else:
                     proto_act_img_j = prototype_activation_function_in_numpy(
@@ -430,7 +423,7 @@ class PrototypeProjectionCallback(pl.Callback):
 
                         np.save(os.path.join(self.proto_epoch_dir,
                                              prototype_self_act_filename_prefix + str(
-                                                 j) + '.npy'),
+                                                 j) + ".npy"),
                                 proto_act_img_j)
 
                     if prototype_img_filename_prefix is not None:
@@ -442,15 +435,15 @@ class PrototypeProjectionCallback(pl.Callback):
                         original_img_j_norm = helpers.normalize_array_0_1(
                             original_img_j)
                         original_img_j_pil = Image.fromarray(np.squeeze(
-                            original_img_j_norm*255).astype('uint8'), 'L')
+                            original_img_j_norm*255).astype("uint8"), "L")
                         original_img_j_pil.save(os.path.join(self.proto_epoch_dir,
-                                                prototype_img_filename_prefix + '-original' + str(
-                                                    j) + '.png'))
+                                                prototype_img_filename_prefix + "-original" + str(
+                                                    j) + ".png"))
                         # plt.imsave(os.path.join(self.proto_epoch_dir,
-                        #                         prototype_img_filename_prefix + '-original' + str(
-                        #                             j) + '.png'),
+                        #                         prototype_img_filename_prefix + "-original" + str(
+                        #                             j) + ".png"),
                         #            original_img_j,
-                        #            cmap = 'gray')
+                        #            cmap = "gray")
                         # overlay (upsampled) self activation on original image and save the result
                         rescaled_act_img_j = upsampled_act_img_j - np.amin(
                             upsampled_act_img_j)
@@ -466,10 +459,10 @@ class PrototypeProjectionCallback(pl.Callback):
                         '''
                         2. SAVE original image overlayed with activation map
                         '''
-                        pdb.set_trace()
+
                         plt.imsave(os.path.join(self.proto_epoch_dir,
-                                                prototype_img_filename_prefix + '-original_with_self_act' + str(
-                                                    j) + '.png'),
+                                                prototype_img_filename_prefix + "-original_with_self_act" + str(
+                                                    j) + ".png"),
                                    overlayed_original_img_j,
                                    vmin=0.0,
                                    vmax=1.0)
@@ -485,16 +478,16 @@ class PrototypeProjectionCallback(pl.Callback):
                             # normalize
                             rf_img_j_norm = helpers.normalize_array_0_1(rf_img_j)
                             rf_img_j_pil = Image.fromarray(np.squeeze(
-                                rf_img_j_norm*255).astype('uint8'), 'L')
+                                rf_img_j_norm*255).astype("uint8"), "L")
                             rf_img_j_pil.save(os.path.join(self.proto_epoch_dir,
-                                                    prototype_img_filename_prefix + '-receptive_field' + str(
-                                                        j) + '.png'))
+                                                    prototype_img_filename_prefix + "-receptive_field" + str(
+                                                        j) + ".png"))
 
                             # plt.imsave(os.path.join(self.proto_epoch_dir,
-                            #                         prototype_img_filename_prefix + '-receptive_field' + str(
-                            #                             j) + '.png'),
+                            #                         prototype_img_filename_prefix + "-receptive_field" + str(
+                            #                             j) + ".png"),
                             #            rf_img_j,
-                            #            cmap = 'gray')
+                            #            cmap = "gray")
 
                             '''
                             4. SAVE image corresponding to the prototype's 
@@ -504,8 +497,8 @@ class PrototypeProjectionCallback(pl.Callback):
                                                  rf_prototype_j[1]:rf_prototype_j[2],
                                                  rf_prototype_j[3]:rf_prototype_j[4]]
                             plt.imsave(os.path.join(self.proto_epoch_dir,
-                                                    prototype_img_filename_prefix + '-receptive_field_with_self_act' + str(
-                                                        j) + '.png'),
+                                                    prototype_img_filename_prefix + "-receptive_field_with_self_act" + str(
+                                                        j) + ".png"),
                                        overlayed_rf_img_j,
                                        vmin=0.0,
                                        vmax=1.0)
@@ -518,14 +511,14 @@ class PrototypeProjectionCallback(pl.Callback):
                         proto_img_j_norm = helpers.normalize_array_0_1(
                             proto_img_j)
                         proto_img_j_pil = Image.fromarray(np.squeeze(
-                            proto_img_j_norm*255).astype('uint8'), 'L')
+                            proto_img_j_norm*255).astype("uint8"), "L")
                         proto_img_j_pil.save(os.path.join(self.proto_epoch_dir,
                                                 prototype_img_filename_prefix + str(
-                                                    j) + '.png'))
+                                                    j) + ".png"))
 
                         # plt.imsave(os.path.join(self.proto_epoch_dir,
                         #                         prototype_img_filename_prefix + str(
-                        #                             j) + '.png'),
+                        #                             j) + ".png"),
                         #            proto_img_j,
                         #            vmin=0.0,
                         #            vmax=1.0)
