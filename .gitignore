@@ -7,6 +7,7 @@ output_logs/
 params/
 dockerfiles/
 checkpoints/
+prototypes/
 __pycache__/
 .idea/
 .ipynb_checkpoints/
