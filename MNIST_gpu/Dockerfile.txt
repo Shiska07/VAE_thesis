@@ -1,0 +1,5 @@
+# Start your image with a node base image
+FROM shiska07/pytorch_lightning:captum
+
+RUN python3.10 -m pip install --upgrade pip \
+    && pip install opencv-python==3.10.13
