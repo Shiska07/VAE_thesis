@@ -1,10 +1,12 @@
 Data/
 data/
 logs/
+old_logs/
 lightning_logs/
 pretrained_models/
 output_logs/
 params/
+params_linux/
 dockerfiles/
 checkpoints/
 prototypes/
